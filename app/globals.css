@@ -1,0 +1,108 @@
+/* Zettamight V2 — modernist design system ported from source/_ds tokens and
+   the prototype's inline <style>. Plain CSS + CSS variables (no Tailwind), so
+   the look matches the reference exactly. Theme flips on <html data-theme>. */
+
+:root {
+  --accent: #ff563c;
+  --accent-600: #dd2b0f;
+  --accent-700: #ae1800;
+
+  --ink: #14161f;
+  --app-bg: #f1f0f5;
+  --card-bg: #ffffff;
+  --float-bg: #ffffff;
+  --nav-bg: rgba(255, 255, 255, 0.9);
+  --hair: rgba(20, 22, 31, 0.12);
+  --muted: rgba(20, 22, 31, 0.55);
+  --tint-bg: #fff1ee;
+  --login-bg: #fff7f4;
+  --login-art: #ffe7e2;
+
+  --font-heading: var(--font-archivo), system-ui, sans-serif;
+  --font-body: var(--font-archivo), system-ui, sans-serif;
+}
+
+:root[data-theme='dark'] {
+  --ink: #f4f4f5;
+  --app-bg: #0d0f15;
+  --card-bg: #171a22;
+  --float-bg: #171a22;
+  --nav-bg: rgba(13, 15, 21, 0.85);
+  --hair: rgba(255, 255, 255, 0.1);
+  --muted: rgba(255, 255, 255, 0.55);
+  --tint-bg: rgba(255, 255, 255, 0.06);
+  --login-bg: #0d0f15;
+  --login-art: #1a1420;
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--app-bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+h1, h2, h3, h4, h5 { font-family: var(--font-heading); font-weight: 800; letter-spacing: -0.02em; margin: 0; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--accent-600); }
+button, input { font-family: inherit; }
+button { transition: transform 0.16s cubic-bezier(0.32, 0.72, 0, 1), background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease; }
+button:active { transform: scale(0.972); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+input { color: var(--ink); }
+input::placeholder { color: var(--muted); }
+
+@keyframes fm-ping { 0% { transform: scale(0.6); opacity: 0.5; } 100% { transform: scale(1.9); opacity: 0; } }
+@keyframes sheetUp { from { transform: translateY(102%); } to { transform: translateY(0); } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes riseIn { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+@keyframes popIn { from { opacity: 0; transform: scale(0.9); } to { opacity: 1; transform: scale(1); } }
+@keyframes beat { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(0.6); opacity: 0.45; } }
+@keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0.2; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.sheet { animation: sheetUp 0.42s cubic-bezier(0.32, 0.72, 0, 1) both; }
+.rise { animation: riseIn 0.38s cubic-bezier(0.32, 0.72, 0, 1) both; }
+.rise2 { animation: riseIn 0.38s cubic-bezier(0.32, 0.72, 0, 1) 0.06s both; }
+.pop { animation: popIn 0.3s cubic-bezier(0.32, 0.72, 0, 1) both; }
+.fade { animation: fadeIn 0.3s ease both; }
+
+.noscroll::-webkit-scrollbar { display: none; }
+.noscroll { scrollbar-width: none; }
+.row { transition: background 0.18s ease, transform 0.16s cubic-bezier(0.32, 0.72, 0, 1); }
+.row:hover { background: color-mix(in srgb, var(--ink) 4.5%, transparent); }
+
+.leaflet-container { background: #0d0f15; font-family: var(--font-body), system-ui; }
+.leaflet-control-attribution { font-size: 9px !important; padding: 1px 5px !important; border-radius: 999px 0 0 0; background: rgba(255, 255, 255, 0.72) !important; color: #4a4a55 !important; }
+.leaflet-control-attribution a { color: #4a4a55 !important; }
+
+/* Zoom buttons, restyled to match the console rather than Leaflet's default. */
+.leaflet-control-zoom { border: 0 !important; box-shadow: 0 6px 18px rgba(10, 12, 20, 0.24) !important; border-radius: 14px !important; overflow: hidden; }
+.leaflet-control-zoom a {
+  width: 36px !important;
+  height: 36px !important;
+  line-height: 36px !important;
+  background: var(--float-bg) !important;
+  color: var(--ink) !important;
+  border: 0 !important;
+  border-bottom: 1px solid var(--hair) !important;
+  font-size: 19px !important;
+  font-weight: 700;
+}
+.leaflet-control-zoom a:last-child { border-bottom: 0 !important; }
+.leaflet-control-zoom a:hover { background: color-mix(in srgb, var(--ink) 8%, var(--float-bg)) !important; }
+
+.nb { transition: color 0.2s ease; color: var(--muted); }
+.nb[data-on='1'] { color: var(--ink); }
+.seg[data-on='1'] { background: var(--ink); color: var(--app-bg); }
+.chip[data-on='1'] { background: var(--ink); color: var(--app-bg); border-color: var(--ink) !important; }
+
+.deskonly, .deskflex { display: none !important; }
+@media (min-width: 1024px) {
+  .deskonly { display: block !important; }
+  .deskflex { display: flex !important; }
+  .mobonly { display: none !important; }
+}

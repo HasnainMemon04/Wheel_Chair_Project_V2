@@ -1,0 +1,66 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# local env files (keep secrets out of git)
+.env*.local
+.env
+
+# ---------------------------------------------------------------------------
+# One-off bench/maintenance scripts. These are NOT part of the app, and several
+# hardcode real secrets — the per-chair HMAC device keys and the operator
+# passwords. This repository is public, so publishing them would let anyone
+# forge telemetry for any chair and sign in to the operator console.
+#
+# They stay on disk and keep working locally; they simply never leave it.
+# Anything worth keeping should read its secrets from the environment, the way
+# the app itself does.
+# ---------------------------------------------------------------------------
+/check_ota_db.js
+/check_secret_key.js
+/check_wchair003.js
+/check_wheelchairs_columns.js
+/fix_all_device_keys.js
+/fix_device_key.js
+/force_override_wchair003.js
+/persist_bench_override.js
+/seed_v2_operators.js
+/test_hmac_ingest.js
+/test_ingest.js
+/upload_v5_ota.js
+
+# Belt and braces for future bench scripts dropped into the root.
+/check_*.js
+/fix_*.js
+/test_*.js
+/seed_*.js
+/force_*.js
+/persist_*.js
+/upload_*.js
+/*.bin
+
+# Serial-port bench helpers (no secrets, but not part of the deployed app).
+/check_gps_live.py
+/find_com_ports.py
+/read_com14_logs.py
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
