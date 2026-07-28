@@ -1297,6 +1297,38 @@ export default function OpsPage() {
     return { online, rented, available, attention, total: sorted.length };
   }, [sorted, now]);
 
+  /* ---------------------------------------------------- emergency popup ---
+     Fires on the TRANSITION into a fall, tamper or manual SOS — the things
+     that mean someone may be hurt right now.
+     Deliberately not on a bare SAFE_FAULT: a missing temperature probe holds
+     that state indefinitely, and a dialog that is always up is one an operator
+     learns to dismiss without reading. */
+  const [alarmPopup, setAlarmPopup] = useState<{ id: string; cause: string; at: number } | null>(null);
+  const seenEmergencies = useRef<Set<string>>(new Set<string>());
+
+  useEffect(() => {
+    const live = new Set<string>();
+    for (const d of deviceStates) {
+      if (!isOnline(d, now)) continue;
+      const isFall = (d.tilt ?? 0) > FALL_TILT_DEG;
+      const isTamper = d.tamper === true;
+      if (!isFall && !isTamper) continue;
+      live.add(d.wheelchair_id);
+      if (!seenEmergencies.current.has(d.wheelchair_id)) {
+        setAlarmPopup({
+          id: d.wheelchair_id,
+          cause: isFall ? `Fall detected — ${(d.tilt ?? 0).toFixed(0)}° tilt` : 'Tamper alarm latched',
+          at: Date.now(),
+        });
+      }
+    }
+    // Drop chairs whose emergency ended, so a repeat incident alerts again.
+    for (const id of Array.from(seenEmergencies.current)) {
+      if (!live.has(id)) seenEmergencies.current.delete(id);
+    }
+    for (const id of Array.from(live)) seenEmergencies.current.add(id);
+  }, [deviceStates, now]);
+
   const activeCriticalFaults = useMemo(() => {
     return sorted.filter((d) => {
       if (!isOnline(d, now)) return false;
@@ -2177,6 +2209,141 @@ export default function OpsPage() {
             </HoldButton>
           </div>
         </div>
+
+        {/* ---- Emergency popup ------------------------------------------
+            Two distinct actions on purpose. "Silence" stops the siren and
+            nothing else; the chair stays cut out. "Clear" releases every
+            latch, which is what actually lets the chair move again — so it
+            reads as the heavier action, because it is. */}
+        {alarmPopup ? (
+          <div
+            role="alertdialog"
+            aria-modal="true"
+            aria-label="Emergency alarm"
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 1000,
+              background: 'rgba(0,0,0,.6)',
+              backdropFilter: 'blur(3px)',
+              display: 'grid',
+              placeItems: 'center',
+              padding: 20,
+            }}
+          >
+            <div
+              style={{
+                width: '100%',
+                maxWidth: 460,
+                borderRadius: 24,
+                background: 'var(--app-bg)',
+                border: `2px solid ${RED}`,
+                boxShadow: '0 24px 60px rgba(0,0,0,.5)',
+                overflow: 'hidden',
+              }}
+            >
+              <div style={{ background: RED, color: '#fff', padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 12 }}>
+                <span
+                  style={{ width: 12, height: 12, borderRadius: 999, background: '#fff', flex: 'none', animation: 'beat .8s ease-in-out infinite' }}
+                  aria-hidden="true"
+                />
+                <span style={{ fontSize: 17, fontWeight: 800 }}>Emergency · {alarmPopup.id}</span>
+              </div>
+
+              <div style={{ padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <span style={{ fontSize: 19, fontWeight: 800, color: 'var(--ink)' }}>{alarmPopup.cause}</span>
+
+                {(() => {
+                  const d = deviceStates.find((x) => x.wheelchair_id === alarmPopup.id);
+                  const spd = realSpeedKmh(d);
+                  const muted = d?.alarm_silenced === true;
+                  return (
+                    <>
+                      <span style={{ fontSize: 13.5, color: 'var(--muted)', lineHeight: 1.55 }}>
+                        The chair has cut its own motion relay and is sounding its siren.
+                        {d?.lat != null && d?.lng != null
+                          ? ` Last position ${d.lat.toFixed(5)}, ${d.lng.toFixed(5)}.`
+                          : ' No position available.'}
+                        {spd != null ? ` Moving at ${spd.toFixed(1)} km/h.` : ''}
+                      </span>
+                      {muted ? (
+                        <span style={{ fontSize: 13, fontWeight: 700, color: AMBER }}>
+                          Siren muted — the chair is still cut out.
+                        </span>
+                      ) : null}
+                    </>
+                  );
+                })()}
+
+                <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap' }}>
+                  <button
+                    onClick={() => {
+                      setSelectedId(alarmPopup.id);
+                      void run('SILENCE_ALARM');
+                    }}
+                    disabled={busy}
+                    style={{
+                      flex: '1 1 130px',
+                      minHeight: 50,
+                      borderRadius: 999,
+                      border: '1px solid var(--hair)',
+                      background: 'transparent',
+                      color: 'var(--ink)',
+                      fontSize: 14.5,
+                      fontWeight: 800,
+                      cursor: busy ? 'progress' : 'pointer',
+                    }}
+                  >
+                    {pending === 'SILENCE_ALARM' ? 'Silencing…' : '🔇 Silence siren'}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setSelectedId(alarmPopup.id);
+                      void run('CLEAR_SOS');
+                    }}
+                    disabled={busy}
+                    style={{
+                      flex: '1 1 130px',
+                      minHeight: 50,
+                      borderRadius: 999,
+                      border: 0,
+                      background: RED,
+                      color: '#fff',
+                      fontSize: 14.5,
+                      fontWeight: 800,
+                      cursor: busy ? 'progress' : 'pointer',
+                    }}
+                  >
+                    {pending === 'CLEAR_SOS' ? 'Clearing…' : 'Clear alarm'}
+                  </button>
+                </div>
+
+                <button
+                  onClick={() => {
+                    setSelectedId(alarmPopup.id);
+                    setTab('fleet');
+                    setAlarmPopup(null);
+                  }}
+                  style={{
+                    minHeight: 42,
+                    border: 0,
+                    background: 'transparent',
+                    color: 'var(--muted)',
+                    fontSize: 13,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Close and open this chair
+                </button>
+                <span style={{ fontSize: 11.5, color: 'var(--muted)', lineHeight: 1.5, textAlign: 'center' }}>
+                  Silencing stops the sound only. Clearing releases the motion cut — do that
+                  once the chair is upright and the rider is safe.
+                </span>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         {/* emergency critical alert banner */}
         {activeCriticalFaults.length > 0 ? (

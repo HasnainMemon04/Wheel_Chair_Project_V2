@@ -1133,6 +1133,19 @@ export default function RiderApp() {
     rideChair && (rideChair.tilt ?? 0) > FALL_TILT_DEG,
   );
 
+  // Stops the noise and nothing else. Offered first because it is the safe
+  // action: a rider who is still on the ground can quiet the siren without
+  // releasing the chair's motion cut.
+  const [silencing, setSilencing] = useState(false);
+  const silenceAlarmNow = useCallback(async () => {
+    if (!ride || silencing) return;
+    setSilencing(true);
+    setRiderError('');
+    const res = await sendCommand(ride.chairId, 'SILENCE_ALARM');
+    setSilencing(false);
+    if (!res.ok) setRiderError(res.message ?? 'The chair did not answer.');
+  }, [ride, silencing]);
+
   const clearEmergency = useCallback(async () => {
     if (!ride || clearingEmergency) return;
     setClearingEmergency(true);
@@ -4538,9 +4551,13 @@ export default function RiderApp() {
               >
                 Call the depot for help
               </a>
+              {/* Silence and clear are different things and used to share one
+                  button labelled "silence" while actually clearing every latch
+                  — including the motion cut on a chair that might still be on
+                  its side. They are separate now, and worded for what they do. */}
               <button
-                onClick={clearEmergency}
-                disabled={clearingEmergency}
+                onClick={silenceAlarmNow}
+                disabled={silencing || rideChair?.alarm_silenced === true}
                 style={{
                   minHeight: 50,
                   border: '1px solid var(--hair)',
@@ -4549,10 +4566,31 @@ export default function RiderApp() {
                   color: 'var(--ink)',
                   fontSize: 15,
                   fontWeight: 700,
+                  cursor: silencing ? 'progress' : 'pointer',
+                  opacity: rideChair?.alarm_silenced === true ? 0.5 : 1,
+                }}
+              >
+                {rideChair?.alarm_silenced === true
+                  ? 'Alarm silenced'
+                  : silencing
+                    ? 'Silencing…'
+                    : '🔇 Silence the alarm'}
+              </button>
+              <button
+                onClick={clearEmergency}
+                disabled={clearingEmergency}
+                style={{
+                  minHeight: 50,
+                  border: '1px solid var(--hair)',
+                  borderRadius: 999,
+                  background: 'transparent',
+                  color: 'var(--muted)',
+                  fontSize: 14,
+                  fontWeight: 700,
                   cursor: clearingEmergency ? 'progress' : 'pointer',
                 }}
               >
-                {clearingEmergency ? 'Asking the chair…' : 'I am OK — silence the alarm'}
+                {clearingEmergency ? 'Asking the chair…' : 'I am OK — release the chair'}
               </button>
             </div>
             {riderError && (

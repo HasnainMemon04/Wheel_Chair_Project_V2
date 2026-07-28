@@ -37,6 +37,12 @@ export interface DeviceState {
   in_motion: boolean;
   tamper: boolean;
   tamper_count: number;
+  /**
+   * The siren has been muted by an operator. The latches and the motion cut
+   * are UNCHANGED — a silenced chair is still a cut-out chair, and the UI must
+   * never let quiet read as resolved.
+   */
+  alarm_silenced: boolean | null;
   /** Seconds left on an operator maintenance override (0 = none). */
   maint_override_s: number | null;
   uptime: number | null;
