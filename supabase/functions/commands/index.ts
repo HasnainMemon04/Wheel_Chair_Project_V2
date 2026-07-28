@@ -1,3 +1,14 @@
+// @ts-nocheck
+//
+// Deno, not Node. This file runs on Supabase Edge Functions and is deployed
+// with `supabase functions deploy` — it is never bundled into the Next.js app.
+//
+// It is excluded via tsconfig "exclude", but this directive is here as well on
+// purpose: the exclude is one line in one file, and losing it fails the Vercel
+// production build with "Cannot find name Deno" — an error that points at code
+// which is not part of the site at all. Two independent guards, because the
+// failure mode is a broken deploy rather than a bad type.
+
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.7.1"
 
