@@ -61,6 +61,17 @@ yarn-error.log*
 /find_com_ports.py
 /read_com14_logs.py
 
+# ---------------------------------------------------------------------------
+# Firmware. The source is here so the fleet is reproducible, but the device
+# credentials never are: private_config.h holds the WiFi password and the
+# per-chair HMAC key, and anyone with that key can forge telemetry for that
+# chair. Use private_config.example.h as the template.
+# ---------------------------------------------------------------------------
+firmware/include/private_config.h
+firmware/.pio/
+firmware/**/*.bin
+firmware/**/*.elf
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
