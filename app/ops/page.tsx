@@ -1329,6 +1329,26 @@ export default function OpsPage() {
     for (const id of Array.from(live)) seenEmergencies.current.add(id);
   }, [deviceStates, now]);
 
+  /* Only offer images this chair can actually take.
+     Every build carries its own DEVICE_ID and HMAC key, so there is one
+     release row per chair per version. Listing all of them made four
+     identical-looking "v1.2.2" entries and left the operator to guess which
+     was theirs — the deploy guard caught the mismatch, but being asked to
+     choose correctly between indistinguishable options is the actual bug.
+     A null device_id means universal, so it stays offered. */
+  const releasesForSelected = useMemo(
+    () => fwReleases.filter((r) => !r.device_id || r.device_id === selectedId),
+    [fwReleases, selectedId],
+  );
+
+  // Keep the selection valid when the operator switches chairs, otherwise a
+  // release picked for the previous chair stays highlighted but is refused.
+  useEffect(() => {
+    if (selectedFwId && !releasesForSelected.some((r) => r.id === selectedFwId)) {
+      setSelectedFwId(releasesForSelected[0]?.id ?? null);
+    }
+  }, [releasesForSelected, selectedFwId]);
+
   const activeCriticalFaults = useMemo(() => {
     return sorted.filter((d) => {
       if (!isOnline(d, now)) return false;
@@ -4669,9 +4689,21 @@ export default function OpsPage() {
                   <div>
                     <label style={{ display: 'block', fontSize: 11.5, fontWeight: 700, color: 'var(--muted)', marginBottom: 6 }}>
                       Select Registered Release
+                      {selectedId ? (
+                        <span style={{ fontWeight: 500, textTransform: 'none' }}>
+                          {' '}· installable on {selectedId}
+                        </span>
+                      ) : null}
                     </label>
                     <div style={{ display: 'grid', gap: 8 }}>
-                      {fwReleases.map((r) => (
+                      {releasesForSelected.length === 0 ? (
+                        <span style={{ fontSize: 12.5, color: 'var(--muted)', lineHeight: 1.5 }}>
+                          No release has been built for {selectedId ?? 'this chair'} yet. Every image
+                          carries its own DEVICE_ID and key, so a build for another chair cannot be
+                          installed here.
+                        </span>
+                      ) : null}
+                      {releasesForSelected.map((r) => (
                         <div
                           key={r.id}
                           onClick={() => setSelectedFwId(r.id)}
@@ -4688,6 +4720,19 @@ export default function OpsPage() {
                         >
                           <div>
                             <span style={{ fontWeight: 800, fontSize: 14, fontFamily: MONO }}>v{r.version}</span>
+                            <span
+                              style={{
+                                marginLeft: 8,
+                                padding: '2px 7px',
+                                borderRadius: 999,
+                                fontSize: 10.5,
+                                fontWeight: 800,
+                                background: r.device_id ? 'var(--tint-bg)' : 'color-mix(in srgb, var(--ink) 8%, transparent)',
+                                color: r.device_id ? 'var(--accent)' : 'var(--muted)',
+                              }}
+                            >
+                              {r.device_id ?? 'universal'}
+                            </span>
                             <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--muted)' }}>
                               ({(r.size / 1024 / 1024).toFixed(2)} MB)
                             </span>
