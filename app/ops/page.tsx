@@ -3440,6 +3440,31 @@ export default function OpsPage() {
                     {pending === 'CALIBRATE_IMU' ? 'Calibrating…' : 'Set level'}
                   </button>
                 </div>
+                {/* An unwired divider still reports a confident percentage
+                    from the firmware's fallback, and the OTA gate trusts that
+                    same number — so say plainly when it is not a measurement. */}
+                {selected?.batt_valid === false ? (
+                  <div
+                    style={{
+                      marginTop: 12,
+                      padding: '10px 12px',
+                      borderRadius: 14,
+                      border: `1px solid ${AMBER}`,
+                      background: 'rgba(240,180,41,.10)',
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: 'var(--ink)',
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    Battery reading is not measured
+                    <span style={{ display: 'block', fontWeight: 500, color: 'var(--muted)' }}>
+                      The ADC returned nothing, so the percentage shown is a fallback. Check the
+                      divider into GPIO 2 — do not trust charge level on this chair.
+                    </span>
+                  </div>
+                ) : null}
+
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 9, marginTop: 14 }}>
                   <div
                     style={{

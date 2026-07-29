@@ -34,6 +34,12 @@ export interface DeviceState {
   humidity: number | null;
   batt_v: number | null;
   batt_pct: number | null;
+  /**
+   * False when the ADC could not actually measure the pack, in which case
+   * batt_v/batt_pct are a hard-coded fallback rather than a reading. Shown to
+   * the operator, because "98%" from an unwired divider is worse than "—".
+   */
+  batt_valid: boolean | null;
   in_motion: boolean;
   tamper: boolean;
   tamper_count: number;
