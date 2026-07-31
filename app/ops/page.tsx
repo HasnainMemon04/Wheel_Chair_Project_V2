@@ -988,6 +988,34 @@ export default function OpsPage() {
       for (const tId of targetIds) {
         await supabase.from('wheelchairs').update({ target_version: rel.version }).eq('id', tId);
 
+        // "Force Maintenance Override" has to actually grant the override.
+        //
+        // The flag on the OTA command alone is not enough: firmware up to
+        // v1.2.4 reads it only to choose the STATUS LABEL ("override_waiting"
+        // instead of "deferred") and then blocks on the safety fault anyway. A
+        // chair with a dead temperature probe therefore waited on a condition
+        // that could never clear, showing "override_waiting 0%" indefinitely.
+        //
+        // MAINT_OVERRIDE is what actually releases the sensor interlock, so
+        // send it first and let the chair reach LOCKED before the OTA lands.
+        // Newer firmware honours the flag directly and this is then harmless —
+        // but it is what makes the button work on chairs already in the field,
+        // which are exactly the ones that cannot be reached any other way.
+        const chair = deviceStates.find((d) => d.wheelchair_id === tId);
+        const needsOverride =
+          otaMaintenanceOverride
+          && (chair?.session_state === 'SAFE_FAULT' || chair?.tamper === true);
+
+        if (needsOverride) {
+          await supabase.from('commands').insert({
+            wheelchair_id: tId,
+            cmd: 'MAINT_OVERRIDE',
+            args: { minutes: 90 },
+            status: 'pending',
+            req_id: `ota-pre-override-${tId.toLowerCase()}-${Date.now()}`,
+          });
+        }
+
         const reqId = `ota-${rel.version}-${tId.toLowerCase()}-${Date.now()}`;
         await supabase.from('commands').insert({
           wheelchair_id: tId,
