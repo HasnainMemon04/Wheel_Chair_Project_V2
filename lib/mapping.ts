@@ -40,13 +40,22 @@ export function shortId(id: string): string {
 // so no single request can hold it as long. On an updated chair the real gap is
 // around a second.
 //
-// 25s is set to survive a chair that has NOT been updated yet, since the
-// console has to be honest about the whole fleet, not just the newest member.
-// It stays inside the firmware's own OFFLINE_AFTER_S = 30 contract. Once every
-// chair reports 1.2.6 or later this can safely come down to ~8s for faster
-// disconnect detection; the headroom is what buys hysteresis, so shrinking it
-// before then simply reintroduces the flapping.
-export const OFFLINE_AFTER_MS = 25_000;
+// v1.2.7 additionally bounds the TLS handshake, which defaulted to 120s and was
+// NOT covered by httpClient.setTimeout() — a stalled handshake could hold the
+// shared client for two minutes. That was the cause of the long outages.
+//
+// With both fixes deployed the worst case is now bounded by construction:
+// a 5s handshake cap plus the 1s cadence, so roughly 6-7s. Measured on
+// WCHAIR-003 and -004 running 1.2.7, over 150-180s each: p50 1.85s, p90 3.48s,
+// p99 5.51s, worst 3.69s, and ZERO state changes at an 8s window (against 8
+// changes at 5s before the fix, with a 17s worst gap).
+//
+// 10s is therefore set from the bounded worst case, not from tolerance. It is
+// deliberately NOT the 25s that was needed while chairs still ran the old
+// firmware — carrying that number forward would have hidden a regression rather
+// than reported one. If flapping ever returns at 10s, the transport has broken
+// again and the console should say so instead of absorbing it.
+export const OFFLINE_AFTER_MS = 10_000;
 
 export function isOnline(d: DeviceState, nowMs: number = serverNow()): boolean {
   const age = nowMs - Date.parse(d.ts);
