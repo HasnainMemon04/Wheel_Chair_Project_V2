@@ -381,7 +381,18 @@ void networkTask(void *pvParameters) {
 }
 
 // Reusable HTTPS request performer (Keep-alive and single-client session reuse)
-int performHTTPSRequest(const String &url, const String &method, const String &payload, const String &sig, String &responseBody) {
+/**
+ * One shared TLS client, so every caller serialises on wifiClientMutex.
+ *
+ * `mutexWaitMs` exists because they must not all wait forever. Telemetry is the
+ * heartbeat the cloud uses to decide whether this chair is alive, so it waits
+ * as long as it takes. Events and command acks are queued and retried, so they
+ * would rather give up than sit on the mutex while the 1 Hz heartbeat misses
+ * its slot — a burst of them used to starve telemetry for 15-20s and the
+ * console reported a perfectly healthy chair as disconnected.
+ */
+int performHTTPSRequest(const String &url, const String &method, const String &payload, const String &sig, String &responseBody,
+                        uint32_t mutexWaitMs = UINT32_MAX) {
     if (!wifiConnected) return -1;
     if (!url.startsWith("https://")) {
         Serial.println("[TLS] Rejected non-HTTPS request.");
@@ -402,7 +413,11 @@ int performHTTPSRequest(const String &url, const String &method, const String &p
 
     int httpResponseCode = -1;
 
-    if (xSemaphoreTake(wifiClientMutex, portMAX_DELAY) == pdTRUE) {
+    const TickType_t mutexWait = (mutexWaitMs == UINT32_MAX)
+        ? portMAX_DELAY
+        : pdMS_TO_TICKS(mutexWaitMs);
+
+    if (xSemaphoreTake(wifiClientMutex, mutexWait) == pdTRUE) {
         if (!secureClient.connected()) {
             Serial.printf("[TLS] Opening verified TLS session. Free Heap: %d bytes\n", ESP.getFreeHeap());
         }
@@ -432,6 +447,10 @@ int performHTTPSRequest(const String &url, const String &method, const String &p
         }
 
         xSemaphoreGive(wifiClientMutex);
+    } else {
+        // Uplink busy. The caller passed a bounded wait precisely so it could
+        // be told this instead of blocking the heartbeat; its own queue retries.
+        return -6;
     }
 
     return httpResponseCode;
@@ -491,7 +510,10 @@ bool uploadSafetyEvent(const SafetyEvent &event) {
 
     String url = String(SUPABASE_URL) + INGEST_PATH;
     String response;
-    int code = performHTTPSRequest(url, "POST", jsonPayload, signature, response);
+    // Bounded wait: this event is already in a queue that retries, so yielding
+    // to the telemetry heartbeat costs a moment's delay, whereas blocking it
+    // costs the chair its "online" status in the console.
+    int code = performHTTPSRequest(url, "POST", jsonPayload, signature, response, 1500);
     if (code == 200) {
         Serial.printf("[Network] Successfully reported event: %s\n", event.eventType);
         return true;
@@ -1396,7 +1418,10 @@ void processCommands(const String &jsonResponse) {
 
         String ackUrl = String(SUPABASE_URL) + COMMANDS_PATH + "/ack";
         String ackResponse;
-        performHTTPSRequest(ackUrl, "POST", ackPayload, ackSig, ackResponse);
+        // Generous but bounded. An ack matters (the console waits on it), yet
+        // not so much that it should hold the uplink past a heartbeat slot —
+        // the command poll re-acks anything that did not land.
+        performHTTPSRequest(ackUrl, "POST", ackPayload, ackSig, ackResponse, 3000);
     }
 }
 

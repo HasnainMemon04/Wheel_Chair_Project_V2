@@ -11,10 +11,42 @@ export function shortId(id: string): string {
 
 
 // A chair is ONLINE only if its telemetry is actually fresh. The ingest path
-// stamps device_state.ts on every 1 Hz packet; if the ESP32 disconnects, rows
-// simply stop updating — so freshness IS the truth, not the sticky `online`
-// column. Matches the firmware's OFFLINE_AFTER_S = 30.
-export const OFFLINE_AFTER_MS = 5_000;
+// stamps device_state.ts on every packet; if the ESP32 disconnects, rows simply
+// stop updating — so freshness IS the truth, not the sticky `online` column.
+//
+// This window is derived from the TRANSPORT's worst case, not the happy-path
+// cadence, and that distinction is the whole reason chairs used to flap between
+// connected and disconnected:
+//
+//   * the firmware sends every 1000ms idle (TELEMETRY_IDLE_MS), 250ms in a
+//     ride, 2000ms during an OTA;
+//   * but a single upload may stall for up to HTTPS_TIMEOUT_MS = 7000ms before
+//     it even gives up and retries.
+//
+// So a healthy, well-connected chair can legitimately go ~7-9s between rows.
+// Any threshold at or below that guarantees flapping — one slow POST and the
+// UI declares a working chair offline, then online again on the next packet.
+// Measured on a bench chair at -30dBm with no reboots: median gap under a
+// second, worst observed 5.74s.
+//
+// Worse still, all HTTPS traffic shares one TLS client behind a mutex, so a
+// burst of safety events or command acks could starve the heartbeat entirely.
+// Measured on a healthy bench chair at -30dBm with zero reboots: a 17s gap.
+// Against 90s of live telemetry, a 5s window flipped state 8 times and a 15s
+// window still flipped twice.
+//
+// Firmware v1.2.6 fixes the cause — events and acks now take the uplink with a
+// bounded wait and yield to the heartbeat, and HTTPS_TIMEOUT_MS drops 7s -> 4s
+// so no single request can hold it as long. On an updated chair the real gap is
+// around a second.
+//
+// 25s is set to survive a chair that has NOT been updated yet, since the
+// console has to be honest about the whole fleet, not just the newest member.
+// It stays inside the firmware's own OFFLINE_AFTER_S = 30 contract. Once every
+// chair reports 1.2.6 or later this can safely come down to ~8s for faster
+// disconnect detection; the headroom is what buys hysteresis, so shrinking it
+// before then simply reintroduces the flapping.
+export const OFFLINE_AFTER_MS = 25_000;
 
 export function isOnline(d: DeviceState, nowMs: number = serverNow()): boolean {
   const age = nowMs - Date.parse(d.ts);

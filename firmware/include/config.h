@@ -13,16 +13,14 @@
 // running older firmware parse the target version with a strict %d.%d.%d
 // reader, and a two-part string there is unparseable — which reads as
 // "not newer" and silently refuses the OTA.
-#define FW_VERSION         "1.2.5"
+#define FW_VERSION         "1.2.6"
 
 // ------------------------- WiFi & Supabase Credentials -------
 #if __has_include("private_config.h")
 #include "private_config.h"
 #else
-// No private_config.h present. These are placeholders so the tree still
-// compiles for inspection — they are not working credentials and the device
-// will not connect with them. Copy private_config.example.h to
-// private_config.h and fill in the real values; that file is gitignored.
+// No private_config.h present. Placeholders so the tree still compiles for
+// inspection — not working credentials. Copy private_config.example.h.
 #define WIFI_SSID          "YOUR_WIFI_SSID"
 #define WIFI_PASS          "YOUR_WIFI_PASSWORD"
 #define SUPABASE_URL       "https://YOUR-PROJECT.supabase.co"
@@ -138,7 +136,11 @@
 #define OFFLINE_AFTER_S    30   // cloud marks device offline if no telemetry within this window
 
 // ------------------------- Transport / OTA ------------------
-#define HTTPS_TIMEOUT_MS          7000
+// Bounds how long ONE request can hold the shared TLS client, and therefore
+// the worst-case gap in the telemetry heartbeat. At 7000 a single stalled POST
+// blocked the 1 Hz uplink long enough for the console to call a healthy chair
+// disconnected; a small JSON POST that has not answered in 4s is not going to.
+#define HTTPS_TIMEOUT_MS          4000
 #define OTA_VALIDATION_TIMEOUT_MS 90000
 #define OTA_MIN_BATTERY_PCT       30
 #define OTA_REQUIRE_SHA256        1
