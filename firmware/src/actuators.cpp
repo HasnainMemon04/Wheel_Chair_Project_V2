@@ -732,3 +732,19 @@ bool isSafetyFaultActive() {
 bool isOTASafetyFaultActive() {
     return (overtempLatched || fallLatched || manualSOSLatched || sensorFaultLatched);
 }
+
+/**
+ * Faults an operator may NOT override for an OTA.
+ *
+ * A dead probe is a maintenance problem: the chair is parked, locked and going
+ * nowhere, and refusing to write flash because of it is what leaves a broken
+ * chair permanently un-updatable — the one chair most likely to need a fix.
+ *
+ * A fall, a manual SOS or a measured over-temperature are different: something
+ * is physically wrong right now, someone may be on the ground, and the right
+ * response is to attend to the chair rather than reflash it. Those still block,
+ * override or not.
+ */
+bool isOTABlockingEmergency() {
+    return (overtempLatched || fallLatched || manualSOSLatched);
+}

@@ -335,12 +335,21 @@ void initOTA() {
                 bool faults = isOTASafetyFaultActive();
                 bool sessionReady = sessionState == "LOCKED" || sessionState == "IDLE";
 
-                if (faults) {
+                // An override genuinely overrides. This used to select the
+                // LABEL ("override_waiting" vs "deferred") and then block
+                // anyway, so the console offered "Force Maintenance Override &
+                // Immediate Download" and delivered neither — a chair with a
+                // dead probe waited for a condition that could never clear.
+                // A live emergency still blocks, override or not.
+                const bool emergency = isOTABlockingEmergency();
+                if (emergency || (faults && !pendingOTA.maintenanceOverride)) {
                     pendingOTA.stationaryChecks = 0;
                     setOTAStatus(
                         pendingOTA.maintenanceOverride ? "override_waiting" : "deferred",
                         0,
-                        "Safety fault active"
+                        emergency
+                            ? "Emergency active — attend to the chair before updating"
+                            : "Safety fault active — tick the override to update anyway"
                     );
                     continue;
                 }
@@ -380,15 +389,22 @@ void initOTA() {
 
                 pendingOTA.stationaryChecks++;
                 if (pendingOTA.stationaryChecks < 2) {
-                    if (pendingOTA.maintenanceOverride) {
-                        setOTAStatus("override_waiting", 0);
-                        reportOTAStage(
-                            "stationary_check",
-                            "Confirming wheelchair remains stationary",
-                            0,
-                            pendingOTA.version
-                        );
-                    }
+                    // Always report, not just when overriding. This branch used
+                    // to be silent on the normal path, so the console kept
+                    // showing "idle 0%" while an update was in fact queued and
+                    // progressing — indistinguishable from nothing happening,
+                    // which is why the OTA looked broken.
+                    setOTAStatus(
+                        pendingOTA.maintenanceOverride ? "override_waiting" : "deferred",
+                        0,
+                        "Confirming the chair is stationary"
+                    );
+                    reportOTAStage(
+                        "stationary_check",
+                        "Confirming wheelchair remains stationary",
+                        0,
+                        pendingOTA.version
+                    );
                     continue;
                 }
 
@@ -830,9 +846,12 @@ bool handleOTACommand(
     if (maintenanceOverride) {
         pendingOTA.pending = true;
 
+        // Naming the actual blocker matters: "Safety fault active" for a
+        // condition the override is meant to bypass is what made this look
+        // stuck rather than waiting on something specific.
         String waitReason = "Confirming wheelchair is stationary";
-        if (faults) {
-            waitReason = "Safety fault active";
+        if (isOTABlockingEmergency()) {
+            waitReason = "Emergency active — attend to the chair before updating";
         } else if (batt < OTA_MIN_BATTERY_PCT) {
             waitReason = "Battery too low (<30%)";
         } else if (inMotion) {

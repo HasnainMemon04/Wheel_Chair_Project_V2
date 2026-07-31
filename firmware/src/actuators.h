@@ -26,6 +26,9 @@ void safetySupervisorTask(void *pvParameters);
 bool isSafetyFaultActive();
 bool isOTASafetyFaultActive();
 
+/** Faults that block an OTA even with an operator override (fall / SOS / over-temp). */
+bool isOTABlockingEmergency();
+
 // Operator maintenance override: time-limited suppression of the MISSING
 // sensor interlock so a failed probe cannot strand a chair. Refuses (returns
 // false, sets refusalReason) when the device can measure a real hazard.

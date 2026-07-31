@@ -13,7 +13,7 @@
 // running older firmware parse the target version with a strict %d.%d.%d
 // reader, and a two-part string there is unparseable — which reads as
 // "not newer" and silently refuses the OTA.
-#define FW_VERSION         "1.2.3"
+#define FW_VERSION         "1.2.5"
 
 // ------------------------- WiFi & Supabase Credentials -------
 #if __has_include("private_config.h")
