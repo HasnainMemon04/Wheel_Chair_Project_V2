@@ -261,6 +261,22 @@ void initNetwork() {
 
     secureClient.setCACert(GTS_ROOT_R4);
 
+    // Bound the TLS handshake. This is the single biggest cause of a chair
+    // vanishing from the console for a long stretch.
+    //
+    // WiFiClientSecure defaults handshake_timeout to 120000ms — two minutes —
+    // and httpClient.setTimeout() does NOT cover it: that is the read timeout,
+    // applied only once a session exists. So a handshake that stalls (which is
+    // what happens when keep-alive lapses on a flaky link) sat inside
+    // wifiClientMutex for up to two minutes, blocking telemetry, events, acks
+    // and OTA alike. The chair looked disconnected because, as far as the
+    // uplink was concerned, it was.
+    //
+    // The argument is in SECONDS (the API multiplies by 1000). A handshake to a
+    // reachable host completes in well under a second; five is generous and
+    // caps the damage at a few missed heartbeats instead of a blackout.
+    secureClient.setHandshakeTimeout(5);
+
     // Enable keep-alive on the global HTTP client
     httpClient.setReuse(true);
 
