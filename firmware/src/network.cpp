@@ -192,10 +192,15 @@ struct LocalCommand {
     size_t ota_size;
     bool ota_maintenance_override;
     int override_minutes;   // MAINT_OVERRIDE grant length
+    int wheel_unlock_s;     // EMERGENCY_UNLOCK hold length (0 => fw default)
     bool alreadyProcessed;
 };
 
 static int commandPriority(const String &cmd) {
+    // Freeing a chair by hand outranks everything: it is the action taken when
+    // somebody is trapped or a chair is blocking an exit, and it must not sit
+    // behind a queued OTA or geofence write.
+    if (cmd == "EMERGENCY_UNLOCK" || cmd == "EMERGENCY_LOCK") return -1;
     if (cmd == "SOS" || cmd == "POWER_OFF") return 0;
     if (cmd == "LOCK" || cmd == "END_SESSION") return 1;
     if (cmd == "CLEAR_SOS" || cmd == "CLEAR_TAMPER") return 2;
@@ -755,6 +760,16 @@ void uploadTelemetryTask(void *pvParameters) {
             // Seconds left on an operator maintenance override (0 = none), so
             // the console can show that the chair is running in degraded mode.
             doc["maint_override_s"] = maintenanceOverrideRemainingS();
+            // Emergency wheel unlock. Both fields ride on EVERY packet, not
+            // just full ones: free-wheeling is a physical state of the chair,
+            // and the console must show it starting and ending without waiting
+            // for the next full packet.
+            //
+            // has_emg_unlock is what lets the console offer the control on the
+            // chair that actually has the relay, instead of hardcoding an id.
+            doc["has_emg_unlock"] = hasEmergencyWheelUnlock() ? 1 : 0;
+            doc["emg_unlock_s"] = emergencyWheelUnlockRemainingS();
+            doc["emg_unlock"] = emergencyWheelUnlockRemainingS() > 0 ? 1 : 0;
             doc["power"] = localData.power_state ? 1 : 0;
             doc["locked"] = localData.locked_state ? 1 : 0;
             doc["session_state"] = localData.session_state;
@@ -932,6 +947,7 @@ void processCommands(const String &jsonResponse) {
         lc.lng = args["lng"] | 67.063734;
         lc.use_current_location = args["use_current_location"] | false;
         lc.override_minutes = args["minutes"] | MAINT_OVERRIDE_DEFAULT_MIN;
+        lc.wheel_unlock_s = args["seconds"] | 0;   // 0 => firmware default
         lc.ota_url = args["url"].as<String>();
         lc.ota_version = args["version"].as<String>();
         lc.ota_sha256 = args["sha256"].as<String>();
@@ -1087,6 +1103,43 @@ void processCommands(const String &jsonResponse) {
             cancelMaintenanceOverride();
             xSemaphoreTake(stateMutex, portMAX_DELAY);
             reportSafetyEvent("MAINT_OVERRIDE_CANCELLED", "{}");
+            ok = true;
+        } else if (cmd == "EMERGENCY_UNLOCK") {
+            // Releases the electromagnetic wheel brake so the chair can be
+            // pushed by hand. Deliberately NOT gated on hazardActive: a fall,
+            // an SOS or a dead sensor are precisely when somebody needs to move
+            // the chair, and refusing then would make the control useless.
+            //
+            // What keeps it safe instead is that it is time-boxed, it
+            // re-engages by itself, it never survives a reboot, and the
+            // condition it was used under is recorded on the event.
+            const uint32_t holdSeconds = lc.wheel_unlock_s > 0
+                ? (uint32_t)lc.wheel_unlock_s
+                : 0;   // 0 => firmware default
+            const bool wasInMotion = inMotion;
+            xSemaphoreGive(stateMutex);
+            String unlockResult;
+            const bool released = requestEmergencyWheelUnlock(holdSeconds, unlockResult);
+            const uint32_t grantedS = emergencyWheelUnlockRemainingS();
+            xSemaphoreTake(stateMutex, portMAX_DELAY);
+
+            String escaped = unlockResult;
+            escaped.replace("\"", "'");
+            reportSafetyEvent(
+                released ? "WHEEL_UNLOCK" : "WHEEL_UNLOCK_REFUSED",
+                "{\"seconds\":" + String(grantedS)
+                    + ",\"in_motion\":" + String(wasInMotion ? 1 : 0)
+                    + ",\"session_state\":\"" + sharedTelemetry.session_state + "\""
+                    + ",\"message\":\"" + escaped + "\"}"
+            );
+            if (!released) commandError = unlockResult;
+            ok = released;
+        } else if (cmd == "EMERGENCY_LOCK") {
+            // Re-engage early, without waiting for the hold to expire.
+            xSemaphoreGive(stateMutex);
+            engageEmergencyWheelLock();
+            xSemaphoreTake(stateMutex, portMAX_DELAY);
+            reportSafetyEvent("WHEEL_LOCK", "{\"manual\":1}");
             ok = true;
         } else if (cmd == "SILENCE_ALARM") {
             // Deliberately NOT CLEAR_SOS: the siren stops, every latch and the

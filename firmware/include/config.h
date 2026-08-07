@@ -13,7 +13,7 @@
 // running older firmware parse the target version with a strict %d.%d.%d
 // reader, and a two-part string there is unparseable — which reads as
 // "not newer" and silently refuses the OTA.
-#define FW_VERSION         "1.2.7"
+#define FW_VERSION         "1.2.8"
 
 // ------------------------- WiFi & Supabase Credentials -------
 #if __has_include("private_config.h")
@@ -108,6 +108,35 @@
 #define BUZZER_PIN         1    // Piezo Buzzer
 #define BUZZER_ACTIVE_LOW  0    // 0 = active-high, 1 = active-low
 #define STATUS_LED_PIN     21   // Onboard status LED
+
+// ---------------- Emergency wheel unlock (separate relay) ----------------
+// A SECOND relay, distinct from RELAY_MOTION_PIN above. The motion lock gates
+// whether the chair may *drive*; this one cuts power to the electromagnetic
+// wheel brake so the wheels physically free-wheel and the chair can be pushed
+// by hand — the manual escape route when a chair is stuck, immobilised in a
+// fault, or blocking a doorway.
+//
+// Defined ONLY by the build that has the hardware (see platformio.ini). On
+// every other chair nothing below exists, so no pin is claimed and no
+// behaviour changes.
+#ifdef WHEEL_UNLOCK_RELAY_PIN
+#define HAS_WHEEL_UNLOCK        1
+#define RELAY_WHEEL_UNLOCK_PIN  WHEEL_UNLOCK_RELAY_PIN
+
+// Same relay-module family as CH2, so the same polarity. If the wheels release
+// when they should hold, flip this to 0 — nothing else needs to change.
+#ifndef WHEEL_UNLOCK_ACTIVE_LOW
+#define WHEEL_UNLOCK_ACTIVE_LOW 1
+#endif
+
+// The release is deliberately time-boxed and never persisted. A chair left
+// free-wheeling is a chair that can roll down a ramp on its own, so the brake
+// re-engages by itself, and a reboot always comes back braked.
+#define WHEEL_UNLOCK_DEFAULT_S  30
+#define WHEEL_UNLOCK_MAX_S      300
+#else
+#define HAS_WHEEL_UNLOCK        0
+#endif
 
 
 // ------------------------- Thresholds (FEATURES.md) ---------

@@ -123,14 +123,118 @@ static uint8_t activeAlarmCauses() {
                    | (tamperAlarmLatched ? 0x8 : 0));
 }
 
+// --------------------------------------------------------------------------
+// Emergency wheel unlock (second relay — present only on builds that define
+// WHEEL_UNLOCK_RELAY_PIN, i.e. WCHAIR-004).
+//
+// Held in RAM only, never in NVS: a reboot must come back with the brake
+// engaged. A chair that reboots on a ramp and remembers "wheels free" is a
+// chair that rolls away by itself.
+// --------------------------------------------------------------------------
+#if HAS_WHEEL_UNLOCK
+static bool wheelUnlockActive = false;
+static uint32_t wheelUnlockUntilMs = 0;
+
+static void writeWheelUnlockRelay(bool release) {
+    bool pinValue = release;
+    if (WHEEL_UNLOCK_ACTIVE_LOW) {
+        pinValue = !release;
+    }
+    digitalWrite(RELAY_WHEEL_UNLOCK_PIN, pinValue ? HIGH : LOW);
+}
+#endif
+
+bool hasEmergencyWheelUnlock() {
+#if HAS_WHEEL_UNLOCK
+    return true;
+#else
+    return false;
+#endif
+}
+
+uint32_t emergencyWheelUnlockRemainingS() {
+#if HAS_WHEEL_UNLOCK
+    if (!wheelUnlockActive) return 0;
+    const uint32_t now = millis();
+    if (now >= wheelUnlockUntilMs) return 0;
+    return (wheelUnlockUntilMs - now) / 1000;
+#else
+    return 0;
+#endif
+}
+
+bool requestEmergencyWheelUnlock(uint32_t seconds, String &resultMessage) {
+#if HAS_WHEEL_UNLOCK
+    if (seconds == 0 || seconds > WHEEL_UNLOCK_MAX_S) {
+        seconds = WHEEL_UNLOCK_DEFAULT_S;
+    }
+    wheelUnlockActive = true;
+    wheelUnlockUntilMs = millis() + seconds * 1000UL;
+    writeWheelUnlockRelay(true);
+
+    // Two long tones, so anyone standing at the chair hears that the wheels
+    // have just gone free rather than discovering it by the chair moving.
+    buzzerChirp(2, 220);
+
+    Serial.printf(
+        "[WheelUnlock] BRAKE RELEASED for %us — wheels free, chair can be pushed.\n",
+        seconds
+    );
+    resultMessage = "Wheel brake released for " + String(seconds)
+                  + "s. The chair can be pushed by hand.";
+    return true;
+#else
+    (void)seconds;
+    resultMessage = "This chair has no emergency wheel-unlock relay fitted.";
+    return false;
+#endif
+}
+
+void engageEmergencyWheelLock() {
+#if HAS_WHEEL_UNLOCK
+    if (!wheelUnlockActive) return;
+    wheelUnlockActive = false;
+    wheelUnlockUntilMs = 0;
+    writeWheelUnlockRelay(false);
+    Serial.println("[WheelUnlock] Brake RE-ENGAGED — wheels held.");
+#endif
+}
+
+#if HAS_WHEEL_UNLOCK
+// Called from the 20 Hz supervisor so the hold expires on time even if the
+// network task is blocked.
+static void serviceWheelUnlockTimeout() {
+    if (!wheelUnlockActive) return;
+    if (millis() >= wheelUnlockUntilMs) {
+        wheelUnlockActive = false;
+        wheelUnlockUntilMs = 0;
+        writeWheelUnlockRelay(false);
+        Serial.println("[WheelUnlock] Hold expired — brake re-engaged automatically.");
+        reportSafetyEvent("WHEEL_UNLOCK_EXPIRED", "{\"auto_reengaged\":true}");
+    }
+}
+#endif
+
 void initActuators() {
     pinMode(RELAY_MOTION_PIN, OUTPUT);
     pinMode(BUZZER_PIN, OUTPUT);
     pinMode(STATUS_LED_PIN, OUTPUT);
-    
+
     // Set default fail-safe state: Motion LOCKED
     setMotionRelay(false);
-    
+
+#if HAS_WHEEL_UNLOCK
+    // Drive the brake-hold state BEFORE enabling the output, so the pin never
+    // glitches to "released" during boot.
+    writeWheelUnlockRelay(false);
+    pinMode(RELAY_WHEEL_UNLOCK_PIN, OUTPUT);
+    writeWheelUnlockRelay(false);
+    Serial.printf(
+        "[WheelUnlock] Emergency unlock relay ready on GPIO %d (brake engaged).\n",
+        RELAY_WHEEL_UNLOCK_PIN
+    );
+#endif
+
     // Simple startup buzzes
     buzzerChirp(2, 80);
 }
@@ -296,6 +400,12 @@ void safetySupervisorTask(void *pvParameters) {
     while (true) {
         esp_task_wdt_reset();
         loopTicks++;
+
+#if HAS_WHEEL_UNLOCK
+        // Serviced here rather than in the network task: the brake must
+        // re-engage on schedule even while the uplink is stalled or retrying.
+        serviceWheelUnlockTimeout();
+#endif
 
         // Handle non-blocking buzzer warning beeps decrement
         if (buzzerBeepTicks > 0) {
