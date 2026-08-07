@@ -13,7 +13,7 @@
 // running older firmware parse the target version with a strict %d.%d.%d
 // reader, and a two-part string there is unparseable — which reads as
 // "not newer" and silently refuses the OTA.
-#define FW_VERSION         "1.2.9"
+#define FW_VERSION         "1.3.0"
 
 // ------------------------- WiFi & Supabase Credentials -------
 #if __has_include("private_config.h")
@@ -123,10 +123,26 @@
 #define HAS_WHEEL_UNLOCK        1
 #define RELAY_WHEEL_UNLOCK_PIN  WHEEL_UNLOCK_RELAY_PIN
 
-// Same relay-module family as CH2, so the same polarity. If the wheels release
-// when they should hold, flip this to 0 — nothing else needs to change.
+// ACTIVE-HIGH, measured on the fitted module — NOT the same polarity as the
+// CH2 motion relay, which is where the first guess came from.
+//
+// Evidence: with this at 1 the pin idled at 3.33V and the relay clicked exactly
+// once, at power-up, then stayed energized. That is the signature of an
+// active-high input being held asserted: GPIO 41 sits near 0V through reset,
+// initActuators() drives it high, the coil pulls in, and it never releases.
+// Coil supply measured 5V, so the module was working correctly the whole time.
+//
+// Getting this backwards is not a cosmetic bug. Energized-at-rest means the
+// brake coil on the NC contact is UNPOWERED at rest, so a parked chair
+// free-wheels. At 0 the relay is de-energized at rest, which is the fail-safe
+// state: a dead ESP32, a crashed task or a lost 5V rail all leave the brake
+// ON rather than releasing it.
+//
+// It also removes the power-up click entirely — GPIO 41's reset state (input,
+// near 0V) now already matches "brake engaged", so the brake holds from the
+// instant power is applied rather than from whenever initActuators() runs.
 #ifndef WHEEL_UNLOCK_ACTIVE_LOW
-#define WHEEL_UNLOCK_ACTIVE_LOW 1
+#define WHEEL_UNLOCK_ACTIVE_LOW 0
 #endif
 
 // The release is deliberately time-boxed and never persisted. A chair left

@@ -224,8 +224,17 @@ void initActuators() {
     setMotionRelay(false);
 
 #if HAS_WHEEL_UNLOCK
-    // Drive the brake-hold state BEFORE enabling the output, so the pin never
-    // glitches to "released" during boot.
+    // Order matters on a brake control. GPIO 41 is a floating input from reset
+    // until this runs, so:
+    //   1. hold it at the de-energised (brake ON) level through a pull resistor,
+    //      which covers any window where it is not yet an output;
+    //   2. set the output latch while still an input, so enabling the output
+    //      cannot glitch through the released state;
+    //   3. only then make it an output.
+    // With WHEEL_UNLOCK_ACTIVE_LOW 0 that level is LOW, which is also where the
+    // pin naturally sits at reset — so the brake holds from power-on, not from
+    // whenever this function happens to be reached.
+    pinMode(RELAY_WHEEL_UNLOCK_PIN, WHEEL_UNLOCK_ACTIVE_LOW ? INPUT_PULLUP : INPUT_PULLDOWN);
     writeWheelUnlockRelay(false);
     pinMode(RELAY_WHEEL_UNLOCK_PIN, OUTPUT);
     writeWheelUnlockRelay(false);
