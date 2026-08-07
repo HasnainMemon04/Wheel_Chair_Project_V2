@@ -13,7 +13,7 @@
 // running older firmware parse the target version with a strict %d.%d.%d
 // reader, and a two-part string there is unparseable — which reads as
 // "not newer" and silently refuses the OTA.
-#define FW_VERSION         "1.3.0"
+#define FW_VERSION         "1.3.1"
 
 // ------------------------- WiFi & Supabase Credentials -------
 #if __has_include("private_config.h")
@@ -123,26 +123,37 @@
 #define HAS_WHEEL_UNLOCK        1
 #define RELAY_WHEEL_UNLOCK_PIN  WHEEL_UNLOCK_RELAY_PIN
 
-// ACTIVE-HIGH, measured on the fitted module — NOT the same polarity as the
-// CH2 motion relay, which is where the first guess came from.
+// ACTIVE-LOW module. This value REQUIRES the module's logic supply to be
+// separated from its coil supply — see below. Getting either half wrong leaves
+// a parked chair free-wheeling.
 //
-// Evidence: with this at 1 the pin idled at 3.33V and the relay clicked exactly
-// once, at power-up, then stayed energized. That is the signature of an
-// active-high input being held asserted: GPIO 41 sits near 0V through reset,
-// initActuators() drives it high, the coil pulls in, and it never releases.
-// Coil supply measured 5V, so the module was working correctly the whole time.
+// Required wiring (jumper across VCC-JD-VCC REMOVED):
+//     VCC     -> 3V3     (opto input side)
+//     JD-VCC  -> 5V      (relay coil)
+//     GND     -> GND     (common with the ESP32)
+//     IN      -> GPIO 41
 //
-// Getting this backwards is not a cosmetic bug. Energized-at-rest means the
-// brake coil on the NC contact is UNPOWERED at rest, so a parked chair
-// free-wheels. At 0 the relay is de-energized at rest, which is the fail-safe
-// state: a dead ESP32, a crashed task or a lost 5V rail all leave the brake
-// ON rather than releasing it.
+// Why the separation is not optional. The optocoupler LED sits between the
+// module's VCC rail and IN, and conducts when IN is pulled low. With VCC tied
+// to 5V by the jumper, an ESP32 "high" of 3.3V still leaves 1.7V across that
+// LED — above its ~1.2V forward voltage — so the LED keeps conducting and the
+// coil stays energized permanently. Measured exactly that: GPIO 41 swinging a
+// clean 3.33V/0.12V, coil supply a healthy 5V, and the relay latched on after
+// a single power-up click, with NO response to either level. Flipping this
+// flag to 0 changed nothing, which is what ruled out a polarity fault and
+// identified the level-compatibility fault. With VCC on 3V3 the input
+// references the same rail the ESP32 drives, so 3.3V turns the LED fully off
+// while the coil still gets its 5V.
 //
-// It also removes the power-up click entirely — GPIO 41's reset state (input,
-// near 0V) now already matches "brake engaged", so the brake holds from the
-// instant power is applied rather than from whenever initActuators() runs.
+// With that wiring and this at 1: "engaged" drives HIGH -> opto off -> coil
+// de-energized -> brake powered through the NC contact -> wheels HELD. That is
+// the fail-safe resting state; a dead MCU, a hung task or a lost 5V coil rail
+// all leave the brake ON instead of releasing it.
+//
+// An external 10k pull-up from GPIO 41 to 3V3 is worth adding: it holds the
+// module off through reset, before initActuators() has run at all.
 #ifndef WHEEL_UNLOCK_ACTIVE_LOW
-#define WHEEL_UNLOCK_ACTIVE_LOW 0
+#define WHEEL_UNLOCK_ACTIVE_LOW 1
 #endif
 
 // The release is deliberately time-boxed and never persisted. A chair left
