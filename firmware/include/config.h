@@ -13,7 +13,7 @@
 // running older firmware parse the target version with a strict %d.%d.%d
 // reader, and a two-part string there is unparseable — which reads as
 // "not newer" and silently refuses the OTA.
-#define FW_VERSION         "1.3.1"
+#define FW_VERSION         "1.3.2"
 
 // ------------------------- WiFi & Supabase Credentials -------
 #if __has_include("private_config.h")
@@ -123,37 +123,45 @@
 #define HAS_WHEEL_UNLOCK        1
 #define RELAY_WHEEL_UNLOCK_PIN  WHEEL_UNLOCK_RELAY_PIN
 
-// ACTIVE-LOW module. This value REQUIRES the module's logic supply to be
-// separated from its coil supply — see below. Getting either half wrong leaves
-// a parked chair free-wheeling.
+// 0 = the ESP32 pin drives the relay through an NPN, HIGH energizes the coil.
 //
-// Required wiring (jumper across VCC-JD-VCC REMOVED):
-//     VCC     -> 3V3     (opto input side)
-//     JD-VCC  -> 5V      (relay coil)
-//     GND     -> GND     (common with the ESP32)
-//     IN      -> GPIO 41
+// The fitted module is a 1-channel Songle SRD-05VDC-SL-C with a plain
+// VCC / GND / IN header — no JD-VCC pin, no jumper. Its input stage is
+// referenced to the module's own 5V rail and conducts whenever IN is pulled
+// down, so it needs IN within about a volt of 5V to switch OFF. A 3.3V logic
+// high leaves ~1.7V across it, which is not enough: the coil stays energized
+// permanently and NO value of this flag can switch it.
 //
-// Why the separation is not optional. The optocoupler LED sits between the
-// module's VCC rail and IN, and conducts when IN is pulled low. With VCC tied
-// to 5V by the jumper, an ESP32 "high" of 3.3V still leaves 1.7V across that
-// LED — above its ~1.2V forward voltage — so the LED keeps conducting and the
-// coil stays energized permanently. Measured exactly that: GPIO 41 swinging a
-// clean 3.33V/0.12V, coil supply a healthy 5V, and the relay latched on after
-// a single power-up click, with NO response to either level. Flipping this
-// flag to 0 changed nothing, which is what ruled out a polarity fault and
-// identified the level-compatibility fault. With VCC on 3V3 the input
-// references the same rail the ESP32 drives, so 3.3V turns the LED fully off
-// while the coil still gets its 5V.
+// That was established by measurement, not inference. GPIO 41 swung a clean
+// 3.33V/0.12V and the coil rail measured a healthy 5V, yet the relay latched on
+// under BOTH settings of this flag — 1 (idle 3.33V) and 0 (idle 0.12V). Two
+// different levels producing the identical output is only possible if the input
+// cannot be turned off at all, which is what separates a level-compatibility
+// fault from the polarity fault it was first mistaken for.
 //
-// With that wiring and this at 1: "engaged" drives HIGH -> opto off -> coil
-// de-energized -> brake powered through the NC contact -> wheels HELD. That is
-// the fail-safe resting state; a dead MCU, a hung task or a lost 5V coil rail
-// all leave the brake ON instead of releasing it.
+// REQUIRED INTERFACE — this module cannot be driven from GPIO 41 directly:
 //
-// An external 10k pull-up from GPIO 41 to 3V3 is worth adding: it holds the
-// module off through reset, before initActuators() has run at all.
+//     GPIO 41 --[ 1k ]-- B
+//                          NPN (BC547 / 2N2222 / S8050)
+//                GND ----- E
+//          module IN ----- C
+//
+//     module VCC -> 5V,  module GND -> GND (common with the ESP32)
+//
+// The transistor gives IN a hard pull to ~0.2V that the input stage will follow,
+// and releases it entirely when off. It also INVERTS the sense, which is why
+// this flag is 0: "engaged" drives LOW -> transistor off -> IN released -> coil
+// de-energized -> brake powered through the NC contact -> wheels HELD.
+//
+// That resting state is fail-safe by construction. GPIO 41 is a floating input
+// from reset and initActuators() parks it with a pull-DOWN, so the base sees no
+// current and the brake holds from power-on — before any firmware runs. A dead
+// MCU, a hung task or a lost 5V rail all leave the brake ON.
+//
+// An external 10k from GPIO 41 to GND is worth adding for the same reason: it
+// holds the base off through reset regardless of the pin's state.
 #ifndef WHEEL_UNLOCK_ACTIVE_LOW
-#define WHEEL_UNLOCK_ACTIVE_LOW 1
+#define WHEEL_UNLOCK_ACTIVE_LOW 0
 #endif
 
 // The release is deliberately time-boxed and never persisted. A chair left
