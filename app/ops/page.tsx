@@ -85,6 +85,12 @@ interface ZoneDraft {
 // Operator relay grants are a policy value, not a sensor reading: an operator
 // unlock opens the relay for 15 minutes unless the device refuses.
 const OPERATOR_UNLOCK_S = 900;
+// How long the emergency wheel brake stays released. Short on purpose: it is
+// long enough to push a chair clear of a doorway or free a trapped rider, and
+// short enough that a chair nobody is attending to brakes itself again. The
+// device caps this at WHEEL_UNLOCK_MAX_S (300) and re-engages on its own, so
+// this number can never leave a chair free-wheeling indefinitely.
+const EMG_UNLOCK_HOLD_S = 60;
 // Online truth lives in lib/mapping.ts (isOnline: ts fresher than
 // OFFLINE_AFTER_MS) — there is no separate staleness constant here.
 const NMEA_MAX = 60;
@@ -193,7 +199,15 @@ function dm(v: number, isLat: boolean): string {
 type Severity = 'CRITICAL' | 'WARNING' | 'INFO';
 
 const CRITICAL_TYPES = new Set(['FALL', 'OVERTEMP', 'TAMPER', 'UNLOCK_FAILED']);
-const WARNING_TYPES = new Set(['TILT_WARN', 'OVERSPEED', 'GEOFENCE_EXIT', 'SESSION_END_OFFLINE']);
+// A chair with its wheel brake released can roll on its own, so the release is
+// a warning for as long as it lasts — not an INFO line that scrolls away.
+const WARNING_TYPES = new Set([
+  'TILT_WARN',
+  'OVERSPEED',
+  'GEOFENCE_EXIT',
+  'SESSION_END_OFFLINE',
+  'WHEEL_UNLOCK',
+]);
 
 function severityOf(type: string): Severity {
   if (CRITICAL_TYPES.has(type)) return 'CRITICAL';
@@ -221,6 +235,10 @@ const EVENT_TITLE: Record<string, string> = {
   EXPIRY_WARNING: 'Session about to expire',
   UNLOCK_FAILED: 'Unlock refused by the chair',
   SESSION_END_OFFLINE: 'Session ended while offline',
+  WHEEL_UNLOCK: 'Wheel brake released',
+  WHEEL_UNLOCK_EXPIRED: 'Wheel brake re-engaged (timed out)',
+  WHEEL_UNLOCK_REFUSED: 'Wheel release refused',
+  WHEEL_LOCK: 'Wheel brake re-engaged',
 };
 
 const EVENT_BLURB: Record<string, string> = {
@@ -236,6 +254,10 @@ const EVENT_BLURB: Record<string, string> = {
   EXPIRY_WARNING: 'The device warned the rider that the session is ending.',
   UNLOCK_FAILED: 'The device refused an unlock because a safety check was active.',
   SESSION_END_OFFLINE: 'The session was closed after the uplink dropped.',
+  WHEEL_UNLOCK: 'An operator freed the wheels so the chair could be pushed by hand.',
+  WHEEL_UNLOCK_EXPIRED: 'The release timed out and the chair braked itself again.',
+  WHEEL_UNLOCK_REFUSED: 'The chair has no emergency wheel-unlock relay fitted.',
+  WHEEL_LOCK: 'An operator re-engaged the wheel brake before the hold ran out.',
 };
 
 function titleOf(type: string): string {
@@ -2366,6 +2388,55 @@ export default function OpsPage() {
                   </button>
                 </div>
 
+                {/* Freeing the wheels during an emergency is the point of the
+                    relay: after a fall the chair has cut its own motion relay,
+                    so it can neither drive nor be pushed until the brake is
+                    released. Offered only on a chair that reports the hardware,
+                    and only while the brake is actually engaged. */}
+                {(() => {
+                  const d = deviceStates.find((x) => x.wheelchair_id === alarmPopup.id);
+                  if (d?.has_emg_unlock !== true) return null;
+                  if (d.emg_unlock === true) {
+                    return (
+                      <span style={{ fontSize: 12.5, fontWeight: 700, color: AMBER, lineHeight: 1.5 }}>
+                        Wheels are free
+                        {d.emg_unlock_s != null && d.emg_unlock_s > 0 ? ` for ${d.emg_unlock_s}s` : ''} — the
+                        chair can be pushed clear.
+                      </span>
+                    );
+                  }
+                  return (
+                    <HoldButton
+                      onComplete={() => {
+                        setSelectedId(alarmPopup.id);
+                        void run('EMERGENCY_UNLOCK', { seconds: EMG_UNLOCK_HOLD_S });
+                      }}
+                      disabled={busy}
+                      fill="rgba(255,86,60,.30)"
+                      ariaLabel="Hold to release the wheel brake so the chair can be pushed"
+                      style={{
+                        minHeight: 48,
+                        borderRadius: 999,
+                        border: `1px solid ${RED}`,
+                        background: 'rgba(255,86,60,.10)',
+                        color: RED,
+                        fontSize: 13.5,
+                        fontWeight: 800,
+                      }}
+                    >
+                      {(holding) => (
+                        <span style={{ whiteSpace: 'nowrap' }}>
+                          {pending === 'EMERGENCY_UNLOCK'
+                            ? 'Releasing…'
+                            : holding
+                              ? 'Hold…'
+                              : '🔓 Hold to free the wheels'}
+                        </span>
+                      )}
+                    </HoldButton>
+                  );
+                })()}
+
                 <button
                   onClick={() => {
                     setSelectedId(alarmPopup.id);
@@ -3488,6 +3559,145 @@ export default function OpsPage() {
                     {pending === 'CALIBRATE_IMU' ? 'Calibrating…' : 'Set level'}
                   </button>
                 </div>
+
+                {/* ---- Emergency wheel unlock -------------------------------
+                    A SECOND relay, separate from the motion lock. The motion
+                    lock decides whether the chair may drive itself; this cuts
+                    power to the electromagnetic wheel brake so the wheels
+                    free-wheel and the chair can be pushed by hand.
+
+                    Rendered only when the CHAIR says it has the relay fitted
+                    (has_emg_unlock), not when its id happens to be 004 — so a
+                    second chair getting the hardware is a firmware flag and
+                    this panel needs no edit.
+
+                    Deliberately available during a fault: a chair that has cut
+                    its own motion relay after a fall is exactly the chair
+                    somebody needs to move. What keeps it safe is that the
+                    release is time-boxed on the device, re-engages itself, and
+                    never survives a reboot. */}
+                {selected.has_emg_unlock === true ? (
+                  <div
+                    style={{
+                      marginTop: 12,
+                      padding: '12px 13px',
+                      borderRadius: 16,
+                      border: `1px solid ${selected.emg_unlock === true ? RED : 'var(--hair)'}`,
+                      background: selected.emg_unlock === true ? 'rgba(255,86,60,.10)' : 'transparent',
+                      display: 'grid',
+                      gap: 10,
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                      <span
+                        style={{
+                          width: 8,
+                          height: 8,
+                          borderRadius: 999,
+                          flex: 'none',
+                          background: selected.emg_unlock === true ? RED : GREEN,
+                          animation: selected.emg_unlock === true ? 'beat .8s ease-in-out infinite' : undefined,
+                        }}
+                        aria-hidden="true"
+                      />
+                      <span style={{ flex: 1, minWidth: 150, fontSize: 12.5, fontWeight: 700 }}>
+                        {selected.emg_unlock === true
+                          ? `Wheels are FREE${
+                              selected.emg_unlock_s != null && selected.emg_unlock_s > 0
+                                ? ` — ${selected.emg_unlock_s}s left`
+                                : ''
+                            }`
+                          : 'Wheel brake engaged'}
+                        <span style={{ display: 'block', fontWeight: 500, color: 'var(--muted)', lineHeight: 1.45 }}>
+                          {selected.emg_unlock === true
+                            ? 'The chair can roll freely and can be pushed. The brake re-engages by itself when the hold runs out.'
+                            : 'Emergency release fitted. Frees the wheels so the chair can be pushed by hand — separate from the drive lock.'}
+                        </span>
+                      </span>
+                    </div>
+
+                    {/* Moving + brake release is the one genuinely dangerous
+                        combination, so say so rather than quietly allowing it.
+                        It is still not blocked: the operator is the one looking
+                        at the chair. */}
+                    {selected.emg_unlock !== true && selected.in_motion === true ? (
+                      <span style={{ fontSize: 11.5, fontWeight: 700, color: AMBER, lineHeight: 1.45 }}>
+                        The chair is moving. Releasing the brake now lets it coast — stop it first unless
+                        you are freeing a trapped rider.
+                      </span>
+                    ) : null}
+
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      {selected.emg_unlock === true ? (
+                        <button
+                          type="button"
+                          onClick={() => void run('EMERGENCY_LOCK')}
+                          disabled={busy || !fresh}
+                          title={!fresh ? 'The chair must be online' : 'Re-engage the wheel brake now'}
+                          style={{
+                            flex: '1 1 170px',
+                            minHeight: 42,
+                            borderRadius: 999,
+                            border: 0,
+                            background: RED,
+                            color: '#fff',
+                            fontSize: 12.5,
+                            fontWeight: 800,
+                            cursor: busy || !fresh ? 'not-allowed' : 'pointer',
+                            opacity: busy || !fresh ? 0.55 : 1,
+                          }}
+                        >
+                          {pending === 'EMERGENCY_LOCK' ? 'Re-engaging…' : 'Re-engage brake now'}
+                        </button>
+                      ) : (
+                        <>
+                          {/* Hold, not click. Freeing the wheels of a chair
+                              that may be on a slope is not a control anyone
+                              should be able to trigger by mis-tapping. */}
+                          <HoldButton
+                            onComplete={() => void run('EMERGENCY_UNLOCK', { seconds: EMG_UNLOCK_HOLD_S })}
+                            disabled={busy || !fresh}
+                            fill="rgba(255,86,60,.30)"
+                            ariaLabel="Hold to release the wheel brake"
+                            style={{
+                              flex: '1 1 200px',
+                              minHeight: 42,
+                              borderRadius: 999,
+                              border: `1px solid ${RED}`,
+                              background: 'rgba(255,86,60,.10)',
+                              color: RED,
+                              fontSize: 12.5,
+                              fontWeight: 800,
+                            }}
+                          >
+                            {(holding) => (
+                              <span style={{ whiteSpace: 'nowrap' }}>
+                                {pending === 'EMERGENCY_UNLOCK'
+                                  ? 'Releasing…'
+                                  : holding
+                                    ? 'Hold…'
+                                    : `Hold to free wheels (${EMG_UNLOCK_HOLD_S}s)`}
+                              </span>
+                            )}
+                          </HoldButton>
+                          {!fresh ? (
+                            <span
+                              style={{
+                                flex: '1 1 100%',
+                                fontSize: 11.5,
+                                fontWeight: 600,
+                                color: 'var(--muted)',
+                              }}
+                            >
+                              The chair is offline, so it cannot be told to release. This needs the
+                              mechanical release on the chair itself.
+                            </span>
+                          ) : null}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ) : null}
                 {/* An unwired divider still reports a confident percentage
                     from the firmware's fallback, and the OTA gate trusts that
                     same number — so say plainly when it is not a measurement. */}

@@ -51,6 +51,22 @@ export interface DeviceState {
   alarm_silenced: boolean | null;
   /** Seconds left on an operator maintenance override (0 = none). */
   maint_override_s: number | null;
+  /**
+   * The chair reports that an emergency wheel-unlock relay is fitted. Only
+   * WCHAIR-004 has one at present, but the console reads the CHAIR rather than
+   * a hardcoded id, so fitting another one is a firmware flag and nothing else.
+   * null on a chair that has never reported (pre-1.2.8 firmware).
+   */
+  has_emg_unlock: boolean | null;
+  /**
+   * The wheel brake is released RIGHT NOW, so the chair free-wheels and can be
+   * pushed by hand. Independent of `locked`, which is the motion lock: a chair
+   * can be locked out of driving and still be pushable, which is the whole
+   * point of the relay.
+   */
+  emg_unlock: boolean | null;
+  /** Seconds left on the time-boxed brake release (0 = brake engaged). */
+  emg_unlock_s: number | null;
   uptime: number | null;
   rssi: number | null;
   power: boolean;
