@@ -3,6 +3,10 @@
 #include "network.h"
 #include "config.h"
 #include <esp_task_wdt.h>
+#if HAS_POWER_RELAY
+#include "nvs_flash.h"
+#include "nvs.h"
+#endif
 
 // Track relay states locally
 static bool motionRelayState = true;  // opposite default to trigger boot log
@@ -215,6 +219,104 @@ static void serviceWheelUnlockTimeout() {
 }
 #endif
 
+// --------------------------------------------------------------------------
+// Emergency power cut (third relay — WCHAIR-004 only).
+//
+// Latching and PERSISTED, which is the opposite of the wheel unlock and for the
+// opposite reason. Free-wheeling is the hazard, so the brake release expires by
+// itself. A power cut IS the safe state, so nothing may silently restore it —
+// a reboot caused by the very fault the operator was reacting to must not hand
+// the chair its power back.
+// --------------------------------------------------------------------------
+#if HAS_POWER_RELAY
+static bool powerCutActive = false;
+
+static void writePowerRelay(bool cut) {
+    bool pinValue = cut;
+    if (POWER_RELAY_ACTIVE_LOW) {
+        pinValue = !cut;
+    }
+    digitalWrite(RELAY_POWER_PIN, pinValue ? HIGH : LOW);
+}
+
+static bool readNVSPowerCut() {
+    nvs_handle_t handle;
+    uint8_t cut = 0;
+    if (nvs_open("act_nvs", NVS_READWRITE, &handle) == ESP_OK) {
+        nvs_get_u8(handle, "power_cut", &cut);
+        nvs_close(handle);
+    }
+    return cut == 1;
+}
+
+static void writeNVSPowerCut(bool cut) {
+    nvs_handle_t handle;
+    if (nvs_open("act_nvs", NVS_READWRITE, &handle) == ESP_OK) {
+        nvs_set_u8(handle, "power_cut", cut ? 1 : 0);
+        nvs_commit(handle);
+        nvs_close(handle);
+    }
+}
+#endif
+
+bool hasPowerRelay() {
+#if HAS_POWER_RELAY
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool isPowerCut() {
+#if HAS_POWER_RELAY
+    return powerCutActive;
+#else
+    return false;
+#endif
+}
+
+bool setPowerCut(bool cut, String &resultMessage) {
+#if HAS_POWER_RELAY
+    if (powerCutActive == cut) {
+        resultMessage = cut
+            ? "Main power is already cut."
+            : "Main power is already on.";
+        return true;   // idempotent: the requested state is the actual state
+    }
+    powerCutActive = cut;
+    writePowerRelay(cut);
+    writeNVSPowerCut(cut);
+
+    // Audibly distinct from the wheel unlock's two long tones: three short
+    // chirps, so someone at the chair can tell which relay just moved.
+    buzzerChirp(3, 120);
+
+    Serial.printf("[Power] MAIN POWER %s by operator (latched, persisted).\n",
+                  cut ? "CUT" : "RESTORED");
+    resultMessage = cut
+        ? "Main power cut. It stays off, including across a reboot, until it is turned back on."
+        : "Main power restored.";
+    return true;
+#else
+    (void)cut;
+    resultMessage = "This chair has no emergency power relay fitted.";
+    return false;
+#endif
+}
+
+void restorePersistedPowerCut() {
+#if HAS_POWER_RELAY
+    powerCutActive = readNVSPowerCut();
+    writePowerRelay(powerCutActive);
+    if (powerCutActive) {
+        Serial.println(
+            "[Power] Booted with a PERSISTED power cut still in force — "
+            "awaiting an explicit operator restore."
+        );
+    }
+#endif
+}
+
 void initActuators() {
     pinMode(RELAY_MOTION_PIN, OUTPUT);
     pinMode(BUZZER_PIN, OUTPUT);
@@ -241,6 +343,25 @@ void initActuators() {
     Serial.printf(
         "[WheelUnlock] Emergency unlock relay ready on GPIO %d (brake engaged).\n",
         RELAY_WHEEL_UNLOCK_PIN
+    );
+#endif
+
+#if HAS_POWER_RELAY
+    // Same ordering rule as the brake relay, and the same reason: park the pin
+    // at "powered" through a pull resistor, set the output latch while still an
+    // input, and only then drive it. GPIO 39 floats low from reset, which with
+    // POWER_RELAY_ACTIVE_LOW 0 is already "coil de-energised = chair powered",
+    // so the board cannot cut the chair off by failing to initialise.
+    //
+    // restorePersistedPowerCut() runs after this and re-asserts a latched cut
+    // if one was in force, so a deliberate cut is not lost by booting.
+    pinMode(RELAY_POWER_PIN, POWER_RELAY_ACTIVE_LOW ? INPUT_PULLUP : INPUT_PULLDOWN);
+    writePowerRelay(false);
+    pinMode(RELAY_POWER_PIN, OUTPUT);
+    writePowerRelay(false);
+    Serial.printf(
+        "[Power] Emergency power relay ready on GPIO %d (chair powered).\n",
+        RELAY_POWER_PIN
     );
 #endif
 

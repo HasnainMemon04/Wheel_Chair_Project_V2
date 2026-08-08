@@ -67,6 +67,18 @@ export interface DeviceState {
   emg_unlock: boolean | null;
   /** Seconds left on the time-boxed brake release (0 = brake engaged). */
   emg_unlock_s: number | null;
+  /**
+   * The chair reports an emergency MAIN-POWER relay. A third relay, separate
+   * from both `power` (the logical state driving the motion lock) and
+   * `emg_unlock` (frees the wheels for pushing).
+   */
+  has_pwr_relay: boolean | null;
+  /**
+   * Main power is being held cut by an operator. Unlike the brake release this
+   * LATCHES — it survives a device reboot and only an explicit restore turns it
+   * back on — so the console must never let a cut chair read as merely idle.
+   */
+  pwr_cut: boolean | null;
   uptime: number | null;
   rssi: number | null;
   power: boolean;

@@ -65,3 +65,28 @@ void engageEmergencyWheelLock();
 
 /** Seconds left on an active release, 0 when the brake is engaged. */
 uint32_t emergencyWheelUnlockRemainingS();
+
+// ---- Emergency power cut (third relay; fitted on WCHAIR-004 only) ----------
+//
+// Cuts the wheelchair's MAIN power — independent of both the motion lock (may
+// the chair drive?) and the wheel brake (can the chair be pushed?).
+//
+// Deliberately latching, not time-boxed. A power cut is the safe state, so
+// nothing should silently restore it: it survives reboot in NVS and only an
+// explicit operator command turns power back on. That is the opposite choice
+// from the wheel unlock, and for the opposite reason.
+bool hasPowerRelay();
+
+/** True while main power is being held cut by an operator. */
+bool isPowerCut();
+
+/**
+ * Cut or restore main power. Latches, and is persisted so a reboot cannot
+ * quietly undo a deliberate cut.
+ *
+ * Returns false with a reason when the build has no relay fitted.
+ */
+bool setPowerCut(bool cut, String &resultMessage);
+
+/** Re-assert the persisted power state at boot. Called once from setup. */
+void restorePersistedPowerCut();

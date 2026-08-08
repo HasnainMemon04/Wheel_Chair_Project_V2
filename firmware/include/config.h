@@ -13,7 +13,7 @@
 // running older firmware parse the target version with a strict %d.%d.%d
 // reader, and a two-part string there is unparseable — which reads as
 // "not newer" and silently refuses the OTA.
-#define FW_VERSION         "1.3.2"
+#define FW_VERSION         "1.3.3"
 
 // ------------------------- WiFi & Supabase Credentials -------
 #if __has_include("private_config.h")
@@ -171,6 +171,40 @@
 #define WHEEL_UNLOCK_MAX_S      300
 #else
 #define HAS_WHEEL_UNLOCK        0
+#endif
+
+// ---------------- Emergency power cut (third relay) ----------------------
+// Cuts the wheelchair's main power. A THIRD relay, independent of both the
+// motion lock (GPIO 13) and the wheel brake, and defined only by the build that
+// has it fitted — every other chair compiles with no reference to the pin.
+//
+// Deliberately NOT time-boxed, unlike the wheel unlock. Free-wheeling is a
+// hazard, so that one expires by itself; a power cut is the SAFE state, and a
+// timer that silently restored power would undo an operator's deliberate
+// decision. So this latches, survives reboot via NVS, and only an explicit
+// operator command turns it back on.
+//
+// *** THE ESP32 MUST BE POWERED UPSTREAM OF THIS RELAY ***
+// If the ESP32 sits downstream, cutting power kills the ESP32, which
+// de-energises the coil, which restores power, which reboots the ESP32 — a
+// self-oscillating loop, and no way to ever command power back on. Wire the
+// board's supply before the relay, or from a separate feed.
+#ifdef POWER_RELAY_PIN
+#define HAS_POWER_RELAY         1
+#define RELAY_POWER_PIN         POWER_RELAY_PIN
+
+// Same module family and the same NPN interface as the wheel-unlock relay, so
+// the same sense: 0 => a HIGH from the ESP32 energises the coil.
+//
+// Power flows through the relay's NC contact, so de-energised = powered. That
+// makes the reset state safe in the only direction that matters here: GPIO 39
+// floats low from reset, the coil stays de-energised, and the chair keeps its
+// power rather than the board cutting the chair off by failing.
+#ifndef POWER_RELAY_ACTIVE_LOW
+#define POWER_RELAY_ACTIVE_LOW  0
+#endif
+#else
+#define HAS_POWER_RELAY         0
 #endif
 
 

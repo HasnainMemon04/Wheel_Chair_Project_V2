@@ -60,6 +60,10 @@ void setup() {
     // Initialize Subsystems
     initSensors();
     initActuators();
+    // After initActuators has parked the relay at "powered": if an operator had
+    // latched a power cut before the last reboot, put it back. A cut must not be
+    // undone by the very fault that caused the restart.
+    restorePersistedPowerCut();
     initOTA();
     initNetwork();
     esp_task_wdt_init(TASK_WATCHDOG_TIMEOUT_S, true);

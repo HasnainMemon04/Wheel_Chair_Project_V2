@@ -227,9 +227,14 @@ const WARNING_TYPES = new Set([
   'SESSION_END_OFFLINE',
   'WHEEL_UNLOCK',
 ]);
+// A chair an operator has switched off is out of service until someone switches
+// it back on, and nothing on the device will clear it — so the record of the cut
+// has to stand out rather than scroll past as routine.
+const POWER_CUT_TYPES = new Set(['POWER_CUT']);
 
 function severityOf(type: string): Severity {
   if (CRITICAL_TYPES.has(type)) return 'CRITICAL';
+  if (POWER_CUT_TYPES.has(type)) return 'CRITICAL';
   if (WARNING_TYPES.has(type)) return 'WARNING';
   return 'INFO';
 }
@@ -258,6 +263,9 @@ const EVENT_TITLE: Record<string, string> = {
   WHEEL_UNLOCK_EXPIRED: 'Wheel brake re-engaged (timed out)',
   WHEEL_UNLOCK_REFUSED: 'Wheel release refused',
   WHEEL_LOCK: 'Wheel brake re-engaged',
+  POWER_CUT: 'Main power cut',
+  POWER_RESTORED: 'Main power restored',
+  POWER_CUT_REFUSED: 'Power switch refused',
 };
 
 const EVENT_BLURB: Record<string, string> = {
@@ -277,6 +285,9 @@ const EVENT_BLURB: Record<string, string> = {
   WHEEL_UNLOCK_EXPIRED: 'The release timed out and the chair braked itself again.',
   WHEEL_UNLOCK_REFUSED: 'The chair has no emergency wheel-unlock relay fitted.',
   WHEEL_LOCK: 'An operator re-engaged the wheel brake before the hold ran out.',
+  POWER_CUT: 'An operator removed main power. It latches — a reboot will not restore it.',
+  POWER_RESTORED: 'An operator turned main power back on.',
+  POWER_CUT_REFUSED: 'The chair has no emergency power relay fitted.',
 };
 
 function titleOf(type: string): string {
@@ -3760,6 +3771,138 @@ export default function OpsPage() {
                           ) : null}
                         </>
                       )}
+                    </div>
+                  </div>
+                ) : null}
+
+                {/* ---- Emergency main-power cut (GPIO 39) --------------------
+                    A THIRD relay, sitting directly below the wheel-unlock
+                    control because operators reach for them in the same moment.
+                    Three independent things, deliberately not merged:
+                      * motion lock  — may the chair DRIVE?
+                      * wheel brake  — can the chair be PUSHED?
+                      * this         — does the chair have POWER at all?
+
+                    Unlike the brake release this one LATCHES. It has no
+                    countdown because nothing restores it on a timer: a power cut
+                    is the safe state, and silently handing a chair its power
+                    back would undo a deliberate decision. It also survives a
+                    device reboot, so the panel says so — an operator must not
+                    assume a restart cleared it.
+
+                    Rendered only when the CHAIR reports the relay. */}
+                {selected.has_pwr_relay === true ? (
+                  <div
+                    style={{
+                      marginTop: 12,
+                      padding: '12px 13px',
+                      borderRadius: 16,
+                      border: `1px solid ${selected.pwr_cut === true ? RED : 'var(--hair)'}`,
+                      background: selected.pwr_cut === true ? 'rgba(255,86,60,.10)' : 'transparent',
+                      display: 'grid',
+                      gap: 10,
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                      <span
+                        style={{
+                          width: 8,
+                          height: 8,
+                          borderRadius: 999,
+                          flex: 'none',
+                          background: selected.pwr_cut === true ? RED : GREEN,
+                          animation: selected.pwr_cut === true ? 'beat .8s ease-in-out infinite' : undefined,
+                        }}
+                        aria-hidden="true"
+                      />
+                      <span style={{ flex: 1, minWidth: 150, fontSize: 12.5, fontWeight: 700 }}>
+                        {selected.pwr_cut === true ? 'MAIN POWER CUT' : 'Main power on'}
+                        <span style={{ display: 'block', fontWeight: 500, color: 'var(--muted)', lineHeight: 1.45 }}>
+                          {selected.pwr_cut === true
+                            ? 'Held off by an operator. This does not time out and survives a reboot — it stays off until it is turned back on here.'
+                            : 'Emergency cut fitted. Removes power from the chair entirely — separate from the drive lock and the wheel brake.'}
+                        </span>
+                      </span>
+                    </div>
+
+                    {selected.pwr_cut !== true && selected.in_motion === true ? (
+                      <span style={{ fontSize: 11.5, fontWeight: 700, color: AMBER, lineHeight: 1.45 }}>
+                        The chair is moving. Cutting power now removes drive and steering assist and it
+                        will coast — expect it to keep rolling for a short distance.
+                      </span>
+                    ) : null}
+
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      {selected.pwr_cut === true ? (
+                        /* Restoring power to a chair somebody deliberately cut
+                           deserves the same deliberate gesture as cutting it. */
+                        <HoldButton
+                          onComplete={() => void run('EMERGENCY_POWER_ON')}
+                          disabled={busy || !fresh}
+                          fill="rgba(31,157,85,.30)"
+                          ariaLabel="Hold to restore main power"
+                          style={{
+                            flex: '1 1 200px',
+                            minHeight: 42,
+                            borderRadius: 999,
+                            border: `1px solid ${GREEN}`,
+                            background: 'rgba(31,157,85,.10)',
+                            color: GREEN,
+                            fontSize: 12.5,
+                            fontWeight: 800,
+                          }}
+                        >
+                          {(holding) => (
+                            <span style={{ whiteSpace: 'nowrap' }}>
+                              {pending === 'EMERGENCY_POWER_ON'
+                                ? 'Restoring…'
+                                : holding
+                                  ? 'Hold…'
+                                  : 'Hold to power ON'}
+                            </span>
+                          )}
+                        </HoldButton>
+                      ) : (
+                        <HoldButton
+                          onComplete={() => void run('EMERGENCY_POWER_OFF')}
+                          disabled={busy || !fresh}
+                          fill="rgba(255,86,60,.30)"
+                          ariaLabel="Hold to cut main power"
+                          style={{
+                            flex: '1 1 200px',
+                            minHeight: 42,
+                            borderRadius: 999,
+                            border: `1px solid ${RED}`,
+                            background: 'rgba(255,86,60,.10)',
+                            color: RED,
+                            fontSize: 12.5,
+                            fontWeight: 800,
+                          }}
+                        >
+                          {(holding) => (
+                            <span style={{ whiteSpace: 'nowrap' }}>
+                              {pending === 'EMERGENCY_POWER_OFF'
+                                ? 'Cutting…'
+                                : holding
+                                  ? 'Hold…'
+                                  : '⏻ Hold to power OFF'}
+                            </span>
+                          )}
+                        </HoldButton>
+                      )}
+                      {!fresh ? (
+                        <span
+                          style={{
+                            flex: '1 1 100%',
+                            fontSize: 11.5,
+                            fontWeight: 600,
+                            color: 'var(--muted)',
+                          }}
+                        >
+                          The chair is offline, so it cannot be told to switch. Note a latched cut is
+                          still in force on the chair even while it is unreachable.
+                        </span>
+                      ) : null}
                     </div>
                   </div>
                 ) : null}

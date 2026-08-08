@@ -201,6 +201,10 @@ static int commandPriority(const String &cmd) {
     // somebody is trapped or a chair is blocking an exit, and it must not sit
     // behind a queued OTA or geofence write.
     if (cmd == "EMERGENCY_UNLOCK" || cmd == "EMERGENCY_LOCK") return -1;
+    // Cutting main power outranks even the brake release: it is the broadest
+    // stop available, and it must not queue behind anything.
+    if (cmd == "EMERGENCY_POWER_OFF") return -2;
+    if (cmd == "EMERGENCY_POWER_ON") return -1;
     if (cmd == "SOS" || cmd == "POWER_OFF") return 0;
     if (cmd == "LOCK" || cmd == "END_SESSION") return 1;
     if (cmd == "CLEAR_SOS" || cmd == "CLEAR_TAMPER") return 2;
@@ -770,6 +774,12 @@ void uploadTelemetryTask(void *pvParameters) {
             doc["has_emg_unlock"] = hasEmergencyWheelUnlock() ? 1 : 0;
             doc["emg_unlock_s"] = emergencyWheelUnlockRemainingS();
             doc["emg_unlock"] = emergencyWheelUnlockRemainingS() > 0 ? 1 : 0;
+            // Emergency power cut. Also on every packet: a chair whose main
+            // power an operator has cut must not look merely idle in the
+            // console, and unlike the brake release this one latches, so the
+            // console may be showing it for a long time.
+            doc["has_pwr_relay"] = hasPowerRelay() ? 1 : 0;
+            doc["pwr_cut"] = isPowerCut() ? 1 : 0;
             doc["power"] = localData.power_state ? 1 : 0;
             doc["locked"] = localData.locked_state ? 1 : 0;
             doc["session_state"] = localData.session_state;
@@ -1134,6 +1144,37 @@ void processCommands(const String &jsonResponse) {
             );
             if (!released) commandError = unlockResult;
             ok = released;
+        } else if (cmd == "EMERGENCY_POWER_OFF" || cmd == "EMERGENCY_POWER_ON") {
+            // Cuts or restores the chair's MAIN power on its own relay —
+            // independent of POWER_OFF/POWER_ON above, which set the logical
+            // power_state that drives the motion lock. Both exist on purpose:
+            // one decides whether the chair may drive, this one decides whether
+            // it has any power at all.
+            //
+            // Not gated on hazards, for the same reason as the brake release:
+            // this is what an operator reaches for WHEN something is wrong. It
+            // latches rather than expiring, and the condition it was used under
+            // is recorded on the event.
+            const bool wantCut = (cmd == "EMERGENCY_POWER_OFF");
+            const bool wasInMotion = inMotion;
+            const String stateAtUse = sharedTelemetry.session_state;
+            xSemaphoreGive(stateMutex);
+            String powerResult;
+            const bool applied = setPowerCut(wantCut, powerResult);
+            xSemaphoreTake(stateMutex, portMAX_DELAY);
+
+            String escaped = powerResult;
+            escaped.replace("\"", "'");
+            reportSafetyEvent(
+                applied
+                    ? (wantCut ? "POWER_CUT" : "POWER_RESTORED")
+                    : "POWER_CUT_REFUSED",
+                "{\"in_motion\":" + String(wasInMotion ? 1 : 0)
+                    + ",\"session_state\":\"" + stateAtUse + "\""
+                    + ",\"message\":\"" + escaped + "\"}"
+            );
+            if (!applied) commandError = powerResult;
+            ok = applied;
         } else if (cmd == "EMERGENCY_LOCK") {
             // Re-engage early, without waiting for the hold to expire.
             xSemaphoreGive(stateMutex);
