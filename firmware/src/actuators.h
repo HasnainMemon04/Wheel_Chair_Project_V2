@@ -50,21 +50,25 @@ uint32_t maintenanceOverrideRemainingS();
 bool hasEmergencyWheelUnlock();
 
 /**
- * Release the wheel brake for a bounded number of seconds.
+ * Release the wheel brake. LATCHING — it stays released until an operator
+ * re-engages it. There is no timer.
  *
  * Deliberately NOT gated on safety interlocks: a fall, an SOS or a dead sensor
- * are the situations this exists for. The release is time-boxed, re-engages on
- * its own, and never survives a reboot.
+ * are the situations this exists for.
+ *
+ * The release is held in RAM only and is NOT persisted, so a reboot still comes
+ * back braked. That is deliberate even without a timer: an unattended chair
+ * that restarts must not come back free-wheeling.
  *
  * Returns false with a reason when the build has no relay fitted.
  */
-bool requestEmergencyWheelUnlock(uint32_t seconds, String &resultMessage);
+bool requestEmergencyWheelUnlock(String &resultMessage);
 
-/** Re-engage the wheel brake immediately, cancelling any remaining hold. */
+/** Re-engage the wheel brake. The only thing that ends a release. */
 void engageEmergencyWheelLock();
 
-/** Seconds left on an active release, 0 when the brake is engaged. */
-uint32_t emergencyWheelUnlockRemainingS();
+/** True while the wheel brake is released and the chair can be pushed. */
+bool isEmergencyWheelUnlocked();
 
 // ---- Emergency power cut (third relay; fitted on WCHAIR-004 only) ----------
 //

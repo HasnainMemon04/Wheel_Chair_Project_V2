@@ -192,7 +192,6 @@ struct LocalCommand {
     size_t ota_size;
     bool ota_maintenance_override;
     int override_minutes;   // MAINT_OVERRIDE grant length
-    int wheel_unlock_s;     // EMERGENCY_UNLOCK hold length (0 => fw default)
     bool alreadyProcessed;
 };
 
@@ -772,8 +771,12 @@ void uploadTelemetryTask(void *pvParameters) {
             // has_emg_unlock is what lets the console offer the control on the
             // chair that actually has the relay, instead of hardcoding an id.
             doc["has_emg_unlock"] = hasEmergencyWheelUnlock() ? 1 : 0;
-            doc["emg_unlock_s"] = emergencyWheelUnlockRemainingS();
-            doc["emg_unlock"] = emergencyWheelUnlockRemainingS() > 0 ? 1 : 0;
+            doc["emg_unlock"] = isEmergencyWheelUnlocked() ? 1 : 0;
+            // Retained and pinned at 0. The release no longer counts down, but
+            // the field is still sent every packet on purpose: the ingest RPC
+            // carries an ABSENT key forward, so simply dropping it would freeze
+            // whatever the last countdown value happened to be.
+            doc["emg_unlock_s"] = 0;
             // Emergency power cut. Also on every packet: a chair whose main
             // power an operator has cut must not look merely idle in the
             // console, and unlike the brake release this one latches, so the
@@ -957,7 +960,6 @@ void processCommands(const String &jsonResponse) {
         lc.lng = args["lng"] | 67.063734;
         lc.use_current_location = args["use_current_location"] | false;
         lc.override_minutes = args["minutes"] | MAINT_OVERRIDE_DEFAULT_MIN;
-        lc.wheel_unlock_s = args["seconds"] | 0;   // 0 => firmware default
         lc.ota_url = args["url"].as<String>();
         lc.ota_version = args["version"].as<String>();
         lc.ota_sha256 = args["sha256"].as<String>();
@@ -1123,22 +1125,18 @@ void processCommands(const String &jsonResponse) {
             // What keeps it safe instead is that it is time-boxed, it
             // re-engages by itself, it never survives a reboot, and the
             // condition it was used under is recorded on the event.
-            const uint32_t holdSeconds = lc.wheel_unlock_s > 0
-                ? (uint32_t)lc.wheel_unlock_s
-                : 0;   // 0 => firmware default
             const bool wasInMotion = inMotion;
             xSemaphoreGive(stateMutex);
             String unlockResult;
-            const bool released = requestEmergencyWheelUnlock(holdSeconds, unlockResult);
-            const uint32_t grantedS = emergencyWheelUnlockRemainingS();
+            const bool released = requestEmergencyWheelUnlock(unlockResult);
             xSemaphoreTake(stateMutex, portMAX_DELAY);
 
             String escaped = unlockResult;
             escaped.replace("\"", "'");
             reportSafetyEvent(
                 released ? "WHEEL_UNLOCK" : "WHEEL_UNLOCK_REFUSED",
-                "{\"seconds\":" + String(grantedS)
-                    + ",\"in_motion\":" + String(wasInMotion ? 1 : 0)
+                "{\"latching\":1"
+                    + String(",\"in_motion\":") + String(wasInMotion ? 1 : 0)
                     + ",\"session_state\":\"" + sharedTelemetry.session_state + "\""
                     + ",\"message\":\"" + escaped + "\"}"
             );

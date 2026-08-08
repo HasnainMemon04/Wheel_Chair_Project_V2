@@ -13,7 +13,7 @@
 // running older firmware parse the target version with a strict %d.%d.%d
 // reader, and a two-part string there is unparseable — which reads as
 // "not newer" and silently refuses the OTA.
-#define FW_VERSION         "1.3.3"
+#define FW_VERSION         "1.3.4"
 
 // ------------------------- WiFi & Supabase Credentials -------
 #if __has_include("private_config.h")
@@ -149,26 +149,32 @@
 //     module VCC -> 5V,  module GND -> GND (common with the ESP32)
 //
 // The transistor gives IN a hard pull to ~0.2V that the input stage will follow,
-// and releases it entirely when off. It also INVERTS the sense, which is why
-// this flag is 0: "engaged" drives LOW -> transistor off -> IN released -> coil
-// de-energized -> brake powered through the NC contact -> wheels HELD.
+// and releases it entirely when off. It also INVERTS the sense: a HIGH from the
+// ESP32 energises the coil.
 //
-// That resting state is fail-safe by construction. GPIO 41 is a floating input
-// from reset and initActuators() parks it with a pull-DOWN, so the base sees no
-// current and the brake holds from power-on — before any firmware runs. A dead
-// MCU, a hung task or a lost 5V rail all leave the brake ON.
+// FLIPPED TO 1 at the operator's request: with 0 the console's unlock LOCKED the
+// chair and lock UNLOCKED it, observed on the fitted hardware.
 //
-// An external 10k from GPIO 41 to GND is worth adding for the same reason: it
-// holds the base off through reset regardless of the pin's state.
+// What that inversion means physically. With 0, "release" drives HIGH, which
+// through the NPN energises the coil. If energising the coil ENGAGES the brake,
+// the brake feed is on the relay's NO contact rather than NC.
+//
+// Worth knowing, because it moves where the failure lands: on NO, a
+// de-energised coil means the brake is unpowered, so a dead MCU, a crashed task
+// or a lost 5V rail leaves the wheels FREE. Moving the brake feed from NO to NC
+// would correct the direction in hardware and restore the fail-safe, and this
+// flag would go back to 0. Until then the console reads correctly but the
+// resting-on-failure state does not, and an external 10k pull-UP from GPIO 41 to
+// 3V3 is the useful mitigation — it holds "engaged" through reset, before
+// initActuators() runs.
 #ifndef WHEEL_UNLOCK_ACTIVE_LOW
-#define WHEEL_UNLOCK_ACTIVE_LOW 0
+#define WHEEL_UNLOCK_ACTIVE_LOW 1
 #endif
 
-// The release is deliberately time-boxed and never persisted. A chair left
-// free-wheeling is a chair that can roll down a ramp on its own, so the brake
-// re-engages by itself, and a reboot always comes back braked.
-#define WHEEL_UNLOCK_DEFAULT_S  30
-#define WHEEL_UNLOCK_MAX_S      300
+// The timer was removed at the operator's request: the release now LATCHES and
+// only an explicit re-engage ends it. It is still held in RAM only and never
+// persisted, so a reboot comes back braked — an unattended chair that restarts
+// must not come back free-wheeling.
 #else
 #define HAS_WHEEL_UNLOCK        0
 #endif

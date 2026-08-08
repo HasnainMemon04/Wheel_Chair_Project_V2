@@ -65,7 +65,12 @@ export interface DeviceState {
    * point of the relay.
    */
   emg_unlock: boolean | null;
-  /** Seconds left on the time-boxed brake release (0 = brake engaged). */
+  /**
+   * Legacy. The release was time-boxed until firmware 1.3.4; it now latches, so
+   * 1.3.4+ pins this at 0. Retained because older rows still carry real values
+   * and the device keeps sending it — dropping the key would make the ingest RPC
+   * carry the last countdown forward forever.
+   */
   emg_unlock_s: number | null;
   /**
    * The chair reports an emergency MAIN-POWER relay. A third relay, separate

@@ -137,7 +137,6 @@ static uint8_t activeAlarmCauses() {
 // --------------------------------------------------------------------------
 #if HAS_WHEEL_UNLOCK
 static bool wheelUnlockActive = false;
-static uint32_t wheelUnlockUntilMs = 0;
 
 static void writeWheelUnlockRelay(bool release) {
     bool pinValue = release;
@@ -156,39 +155,34 @@ bool hasEmergencyWheelUnlock() {
 #endif
 }
 
-uint32_t emergencyWheelUnlockRemainingS() {
+bool isEmergencyWheelUnlocked() {
 #if HAS_WHEEL_UNLOCK
-    if (!wheelUnlockActive) return 0;
-    const uint32_t now = millis();
-    if (now >= wheelUnlockUntilMs) return 0;
-    return (wheelUnlockUntilMs - now) / 1000;
+    return wheelUnlockActive;
 #else
-    return 0;
+    return false;
 #endif
 }
 
-bool requestEmergencyWheelUnlock(uint32_t seconds, String &resultMessage) {
+bool requestEmergencyWheelUnlock(String &resultMessage) {
 #if HAS_WHEEL_UNLOCK
-    if (seconds == 0 || seconds > WHEEL_UNLOCK_MAX_S) {
-        seconds = WHEEL_UNLOCK_DEFAULT_S;
+    if (wheelUnlockActive) {
+        resultMessage = "The wheel brake is already released.";
+        return true;   // idempotent: requested state is the actual state
     }
     wheelUnlockActive = true;
-    wheelUnlockUntilMs = millis() + seconds * 1000UL;
     writeWheelUnlockRelay(true);
 
     // Two long tones, so anyone standing at the chair hears that the wheels
     // have just gone free rather than discovering it by the chair moving.
+    // Doubly worth it now there is no timer to end it.
     buzzerChirp(2, 220);
 
-    Serial.printf(
-        "[WheelUnlock] BRAKE RELEASED for %us — wheels free, chair can be pushed.\n",
-        seconds
+    Serial.println(
+        "[WheelUnlock] BRAKE RELEASED — wheels free until an operator re-engages."
     );
-    resultMessage = "Wheel brake released for " + String(seconds)
-                  + "s. The chair can be pushed by hand.";
+    resultMessage = "Wheel brake released. It stays released until it is locked again.";
     return true;
 #else
-    (void)seconds;
     resultMessage = "This chair has no emergency wheel-unlock relay fitted.";
     return false;
 #endif
@@ -198,26 +192,10 @@ void engageEmergencyWheelLock() {
 #if HAS_WHEEL_UNLOCK
     if (!wheelUnlockActive) return;
     wheelUnlockActive = false;
-    wheelUnlockUntilMs = 0;
     writeWheelUnlockRelay(false);
     Serial.println("[WheelUnlock] Brake RE-ENGAGED — wheels held.");
 #endif
 }
-
-#if HAS_WHEEL_UNLOCK
-// Called from the 20 Hz supervisor so the hold expires on time even if the
-// network task is blocked.
-static void serviceWheelUnlockTimeout() {
-    if (!wheelUnlockActive) return;
-    if (millis() >= wheelUnlockUntilMs) {
-        wheelUnlockActive = false;
-        wheelUnlockUntilMs = 0;
-        writeWheelUnlockRelay(false);
-        Serial.println("[WheelUnlock] Hold expired — brake re-engaged automatically.");
-        reportSafetyEvent("WHEEL_UNLOCK_EXPIRED", "{\"auto_reengaged\":true}");
-    }
-}
-#endif
 
 // --------------------------------------------------------------------------
 // Emergency power cut (third relay — WCHAIR-004 only).
@@ -530,12 +508,6 @@ void safetySupervisorTask(void *pvParameters) {
     while (true) {
         esp_task_wdt_reset();
         loopTicks++;
-
-#if HAS_WHEEL_UNLOCK
-        // Serviced here rather than in the network task: the brake must
-        // re-engage on schedule even while the uplink is stalled or retrying.
-        serviceWheelUnlockTimeout();
-#endif
 
         // Handle non-blocking buzzer warning beeps decrement
         if (buzzerBeepTicks > 0) {

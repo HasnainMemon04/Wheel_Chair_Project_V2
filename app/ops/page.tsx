@@ -90,7 +90,10 @@ const OPERATOR_UNLOCK_S = 900;
 // short enough that a chair nobody is attending to brakes itself again. The
 // device caps this at WHEEL_UNLOCK_MAX_S (300) and re-engages on its own, so
 // this number can never leave a chair free-wheeling indefinitely.
-const EMG_UNLOCK_HOLD_S = 60;
+// The wheel release used to be time-boxed here. The timer was removed at the
+// operator's request in 1.3.4: it now latches on the device and only an explicit
+// re-engage ends it, so there is no duration for the console to send. A reboot
+// still comes back braked — that is firmware behaviour, not a timer.
 
 /* ---- Local camera live view (demo rig, operator side only) ----------------
    Deliberately NOT modelled as a chair capability, unlike the wheel-unlock
@@ -2475,9 +2478,8 @@ export default function OpsPage() {
                   if (d.emg_unlock === true) {
                     return (
                       <span style={{ fontSize: 12.5, fontWeight: 700, color: AMBER, lineHeight: 1.5 }}>
-                        Wheels are free
-                        {d.emg_unlock_s != null && d.emg_unlock_s > 0 ? ` for ${d.emg_unlock_s}s` : ''} — the
-                        chair can be pushed clear.
+                        Wheels are free — the chair can be pushed clear. Lock it again from the
+                        chair panel when you are done.
                       </span>
                     );
                   }
@@ -2485,7 +2487,7 @@ export default function OpsPage() {
                     <HoldButton
                       onComplete={() => {
                         setSelectedId(alarmPopup.id);
-                        void run('EMERGENCY_UNLOCK', { seconds: EMG_UNLOCK_HOLD_S });
+                        void run('EMERGENCY_UNLOCK');
                       }}
                       disabled={busy}
                       fill="rgba(255,86,60,.30)"
@@ -3677,16 +3679,10 @@ export default function OpsPage() {
                         aria-hidden="true"
                       />
                       <span style={{ flex: 1, minWidth: 150, fontSize: 12.5, fontWeight: 700 }}>
-                        {selected.emg_unlock === true
-                          ? `Wheels are FREE${
-                              selected.emg_unlock_s != null && selected.emg_unlock_s > 0
-                                ? ` — ${selected.emg_unlock_s}s left`
-                                : ''
-                            }`
-                          : 'Wheel brake engaged'}
+                        {selected.emg_unlock === true ? 'Wheels are FREE' : 'Wheel brake engaged'}
                         <span style={{ display: 'block', fontWeight: 500, color: 'var(--muted)', lineHeight: 1.45 }}>
                           {selected.emg_unlock === true
-                            ? 'The chair can roll freely and can be pushed. The brake re-engages by itself when the hold runs out.'
+                            ? 'The chair can roll freely and can be pushed. There is no timer — it stays released until it is locked again here. A reboot does re-engage it.'
                             : 'Emergency release fitted. Frees the wheels so the chair can be pushed by hand — separate from the drive lock.'}
                         </span>
                       </span>
@@ -3731,7 +3727,7 @@ export default function OpsPage() {
                               that may be on a slope is not a control anyone
                               should be able to trigger by mis-tapping. */}
                           <HoldButton
-                            onComplete={() => void run('EMERGENCY_UNLOCK', { seconds: EMG_UNLOCK_HOLD_S })}
+                            onComplete={() => void run('EMERGENCY_UNLOCK')}
                             disabled={busy || !fresh}
                             fill="rgba(255,86,60,.30)"
                             ariaLabel="Hold to release the wheel brake"
@@ -3752,7 +3748,7 @@ export default function OpsPage() {
                                   ? 'Releasing…'
                                   : holding
                                     ? 'Hold…'
-                                    : `Hold to free wheels (${EMG_UNLOCK_HOLD_S}s)`}
+                                    : 'Hold to free wheels'}
                               </span>
                             )}
                           </HoldButton>
