@@ -91,6 +91,25 @@ const OPERATOR_UNLOCK_S = 900;
 // device caps this at WHEEL_UNLOCK_MAX_S (300) and re-engages on its own, so
 // this number can never leave a chair free-wheeling indefinitely.
 const EMG_UNLOCK_HOLD_S = 60;
+
+/* ---- Local camera live view (demo rig, operator side only) ----------------
+   Deliberately NOT modelled as a chair capability, unlike the wheel-unlock
+   relay. The ESP32 knows nothing about this camera, nothing about it is stored
+   in Supabase, and no firmware reports it: it is a Tapo C200 on the operator's
+   own LAN, re-streamed as MJPEG by a Flask script on their laptop.
+
+   So which chairs have one lives here in the console, and the URL lives in the
+   operator's browser — changing either needs no deploy, no migration and no
+   firmware. Add a chair by adding a line.
+
+   The stream is reachable ONLY from the same network as that laptop. Opening
+   the console from anywhere else still works; the camera panel simply cannot
+   reach it, and says so rather than spinning. */
+const CAMERA_CHAIRS: Record<string, string> = {
+  'WCHAIR-004': 'Chair-side camera',
+};
+const CAMERA_URL_KEY = 'zm_camera_url';
+const CAMERA_URL_DEFAULT = 'http://192.168.1.134:5000/video_feed';
 // Online truth lives in lib/mapping.ts (isOnline: ts fresher than
 // OFFLINE_AFTER_MS) — there is no separate staleness constant here.
 const NMEA_MAX = 60;
@@ -861,6 +880,52 @@ export default function OpsPage() {
       /* ignore */
     }
   }, [silencedBanners]);
+
+  /* ---- local camera live view -------------------------------------------
+     All three start at a value that is identical on the server and the client,
+     then get corrected in an effect. Reading localStorage or window.location
+     during the first render would make the server and browser disagree and
+     produce a hydration mismatch. */
+  const [cameraUrl, setCameraUrl] = useState(CAMERA_URL_DEFAULT);
+  const [cameraInline, setCameraInline] = useState(false);
+  const [cameraFailed, setCameraFailed] = useState(false);
+  const [pageIsHttps, setPageIsHttps] = useState(false);
+
+  useEffect(() => {
+    setPageIsHttps(window.location.protocol === 'https:');
+    try {
+      const saved = localStorage.getItem(CAMERA_URL_KEY);
+      if (saved) setCameraUrl(saved);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(CAMERA_URL_KEY, cameraUrl);
+    } catch {
+      /* ignore */
+    }
+  }, [cameraUrl]);
+
+  // A plain-HTTP stream cannot be embedded in an HTTPS page: the browser
+  // upgrades the request to https://, the Flask server has no TLS, and the
+  // image fails. Worth KNOWING rather than discovering — this lets the panel
+  // say so up front instead of showing a preview that can never load.
+  const cameraNeedsNewWindow = pageIsHttps && cameraUrl.startsWith('http://');
+
+  // Reset the failure flag whenever the target changes, so a corrected URL is
+  // not still wearing the previous one's error.
+  useEffect(() => {
+    setCameraFailed(false);
+  }, [cameraUrl]);
+
+  const openCameraWindow = useCallback(() => {
+    // A top-level navigation is NOT mixed content, so this works from the
+    // HTTPS console even though an inline <img> would be blocked.
+    window.open(cameraUrl, 'wchair-camera', 'width=920,height=640,noopener');
+  }, [cameraUrl]);
 
   const [rentals, setRentals] = useState<RentalRow[]>([]);
   const [rentalsError, setRentalsError] = useState<string | null>(null);
@@ -3696,6 +3761,146 @@ export default function OpsPage() {
                         </>
                       )}
                     </div>
+                  </div>
+                ) : null}
+
+                {/* ---- Local camera live view --------------------------------
+                    Demo rig, not part of the product: a Tapo C200 on the
+                    operator's LAN, re-streamed as MJPEG by a script on their
+                    laptop. Shown only for chairs listed in CAMERA_CHAIRS, and
+                    the panel is explicit that this is a local feed rather than
+                    anything the chair or the cloud knows about — an operator
+                    should never mistake it for fleet telemetry. */}
+                {CAMERA_CHAIRS[selected.wheelchair_id] ? (
+                  <div
+                    style={{
+                      marginTop: 12,
+                      padding: '12px 13px',
+                      borderRadius: 16,
+                      border: '1px solid var(--hair)',
+                      display: 'grid',
+                      gap: 10,
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 12.5, fontWeight: 700 }}>
+                        {CAMERA_CHAIRS[selected.wheelchair_id]}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: 10.5,
+                          fontWeight: 800,
+                          letterSpacing: 0.3,
+                          padding: '2px 7px',
+                          borderRadius: 999,
+                          background: 'var(--tint-bg)',
+                          color: 'var(--accent)',
+                        }}
+                      >
+                        LOCAL NETWORK
+                      </span>
+                    </div>
+                    <span style={{ fontSize: 11.5, color: 'var(--muted)', lineHeight: 1.45 }}>
+                      Streamed from a laptop on the same WiFi, not through the cloud. Nothing here
+                      comes from the chair, and it is not recorded.
+                    </span>
+
+                    <input
+                      value={cameraUrl}
+                      onChange={(e) => setCameraUrl(e.target.value)}
+                      spellCheck={false}
+                      aria-label="Camera stream address"
+                      placeholder={CAMERA_URL_DEFAULT}
+                      style={{
+                        minHeight: 36,
+                        padding: '0 10px',
+                        borderRadius: 10,
+                        border: '1px solid var(--hair)',
+                        background: 'transparent',
+                        color: 'var(--ink)',
+                        fontSize: 11.5,
+                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                      }}
+                    />
+
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        onClick={openCameraWindow}
+                        disabled={!cameraUrl.trim()}
+                        style={{
+                          flex: '1 1 150px',
+                          minHeight: 40,
+                          borderRadius: 999,
+                          border: 0,
+                          background: 'var(--accent)',
+                          color: '#fff',
+                          fontSize: 12.5,
+                          fontWeight: 800,
+                          cursor: cameraUrl.trim() ? 'pointer' : 'not-allowed',
+                          opacity: cameraUrl.trim() ? 1 : 0.55,
+                        }}
+                      >
+                        📹 Open live view
+                      </button>
+                      {/* Offered only when it can actually succeed. On an HTTPS
+                          console with an HTTP stream the browser blocks the
+                          embed, so a "show inline" button there would be a
+                          button that never works. */}
+                      {!cameraNeedsNewWindow ? (
+                        <button
+                          type="button"
+                          onClick={() => setCameraInline((v) => !v)}
+                          style={{
+                            flex: '1 1 120px',
+                            minHeight: 40,
+                            borderRadius: 999,
+                            border: '1px solid var(--hair)',
+                            background: 'transparent',
+                            color: 'var(--ink)',
+                            fontSize: 12.5,
+                            fontWeight: 800,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {cameraInline ? 'Hide preview' : 'Show inline'}
+                        </button>
+                      ) : null}
+                    </div>
+
+                    {cameraNeedsNewWindow ? (
+                      <span style={{ fontSize: 11, color: 'var(--muted)', lineHeight: 1.45 }}>
+                        The console is on HTTPS and this stream is plain HTTP, so the browser will
+                        not embed it in the page. Open live view works — it opens in its own window,
+                        which is not subject to that restriction.
+                      </span>
+                    ) : null}
+
+                    {/* The <img> is mounted only while the preview is open. An
+                        MJPEG response never ends, so leaving it mounted would
+                        hold a connection to the laptop open for the whole
+                        session. */}
+                    {cameraInline && !cameraNeedsNewWindow ? (
+                      cameraFailed ? (
+                        <span style={{ fontSize: 11.5, fontWeight: 700, color: AMBER, lineHeight: 1.45 }}>
+                          No stream at that address. Check the script is running and that this
+                          machine is on the same WiFi as the laptop.
+                        </span>
+                      ) : (
+                        <img
+                          src={cameraUrl}
+                          alt="Live camera feed"
+                          onError={() => setCameraFailed(true)}
+                          style={{
+                            width: '100%',
+                            borderRadius: 12,
+                            border: '1px solid var(--hair)',
+                            background: '#000',
+                            display: 'block',
+                          }}
+                        />
+                      )
+                    ) : null}
                   </div>
                 ) : null}
                 {/* An unwired divider still reports a confident percentage
