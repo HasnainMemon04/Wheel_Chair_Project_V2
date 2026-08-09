@@ -799,11 +799,12 @@ void uploadTelemetryTask(void *pvParameters) {
                     ? static_cast<int32_t>(millis() - localData.temp_last_sample_ms)
                     : -1;
                 doc["rssi"] = localData.wifi_rssi;
-                // Which network the chair is actually on. Signal strength alone
-                // cannot answer "is it on the right WiFi?" — a strong bar on the
-                // wrong SSID looks identical to a strong bar on the right one.
-                // Full packets only: it changes about as often as the hardware.
-                doc["ssid"] = WiFi.SSID();
+                // NOTE: SSID reporting was attempted in 1.3.5/1.3.6 and pulled
+                // back out. Both of those images failed to boot, and reporting
+                // the network name was the only other change in them, so it is
+                // deliberately absent here to isolate the tamper-siren timeout.
+                // The device_state.ssid column and the console label are already
+                // in place and will populate whenever it is reintroduced.
                 doc["ota_status"] = localData.ota_status;
                 doc["ota_progress"] = localData.ota_progress;
                 doc["ota_last_error"] = localData.ota_last_error;
