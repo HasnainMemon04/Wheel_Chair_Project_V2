@@ -4081,30 +4081,11 @@ export default function OpsPage() {
                     ) : null}
                   </div>
                 ) : null}
-                {/* An unwired divider still reports a confident percentage
-                    from the firmware's fallback, and the OTA gate trusts that
-                    same number — so say plainly when it is not a measurement. */}
-                {selected?.batt_valid === false ? (
-                  <div
-                    style={{
-                      marginTop: 12,
-                      padding: '10px 12px',
-                      borderRadius: 14,
-                      border: `1px solid ${AMBER}`,
-                      background: 'rgba(240,180,41,.10)',
-                      fontSize: 12,
-                      fontWeight: 700,
-                      color: 'var(--ink)',
-                      lineHeight: 1.45,
-                    }}
-                  >
-                    Battery reading is not measured
-                    <span style={{ display: 'block', fontWeight: 500, color: 'var(--muted)' }}>
-                      The ADC returned nothing, so the percentage shown is a fallback. Check the
-                      divider into GPIO 2 — do not trust charge level on this chair.
-                    </span>
-                  </div>
-                ) : null}
+                {/* The "battery reading is not measured" banner was removed at the
+                    operator's request. batt_valid is still reported by the device
+                    and still false while the divider into GPIO 2 is unwired — the
+                    percentage on screen remains the firmware's fallback rather
+                    than a measurement, it is simply no longer labelled as one. */}
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 9, marginTop: 14 }}>
                   <div
