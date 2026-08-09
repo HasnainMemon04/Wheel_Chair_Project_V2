@@ -229,6 +229,9 @@ const WARNING_TYPES = new Set([
   'GEOFENCE_EXIT',
   'SESSION_END_OFFLINE',
   'WHEEL_UNLOCK',
+  // The siren going quiet by itself is NOT the tamper resolving. It stays a
+  // warning so the row cannot be read as an all-clear.
+  'TAMPER_SIREN_TIMEOUT',
 ]);
 // A chair an operator has switched off is out of service until someone switches
 // it back on, and nothing on the device will clear it — so the record of the cut
@@ -266,6 +269,7 @@ const EVENT_TITLE: Record<string, string> = {
   WHEEL_UNLOCK_EXPIRED: 'Wheel brake re-engaged (timed out)',
   WHEEL_UNLOCK_REFUSED: 'Wheel release refused',
   WHEEL_LOCK: 'Wheel brake re-engaged',
+  TAMPER_SIREN_TIMEOUT: 'Tamper siren muted itself',
   POWER_CUT: 'Main power cut',
   POWER_RESTORED: 'Main power restored',
   POWER_CUT_REFUSED: 'Power switch refused',
@@ -288,6 +292,8 @@ const EVENT_BLURB: Record<string, string> = {
   WHEEL_UNLOCK_EXPIRED: 'The release timed out and the chair braked itself again.',
   WHEEL_UNLOCK_REFUSED: 'The chair has no emergency wheel-unlock relay fitted.',
   WHEEL_LOCK: 'An operator re-engaged the wheel brake before the hold ran out.',
+  TAMPER_SIREN_TIMEOUT:
+    'The siren stopped on its own after its time limit. The tamper is STILL latched and still needs acknowledging.',
   POWER_CUT: 'An operator removed main power. It latches — a reboot will not restore it.',
   POWER_RESTORED: 'An operator turned main power back on.',
   POWER_CUT_REFUSED: 'The chair has no emergency power relay fitted.',
@@ -669,7 +675,13 @@ function buildDiag(d: DeviceState | null, online: boolean): DiagRow[] {
     rows.push({ name: 'Uplink RSSI', state: online ? 'WARN' : 'FAIL', note: online ? 'not reported' : 'offline' });
   } else {
     const state: DiagState = !online ? 'FAIL' : d.rssi > -80 ? 'PASS' : d.rssi > -95 ? 'WARN' : 'FAIL';
-    rows.push({ name: 'Uplink RSSI', state, note: online ? `${d.rssi} dBm` : 'offline' });
+    rows.push({
+      name: 'Uplink RSSI',
+      state,
+      note: online
+        ? `${d.rssi} dBm${d.ssid ? ` · ${d.ssid}` : ''}`
+        : 'offline',
+    });
   }
 
   // Relay driver: the device reports the latch state and the main power rail.
@@ -1712,6 +1724,10 @@ export default function OpsPage() {
   // offline here within seconds, and its stale sensor data is masked.
   const fresh = selected ? isOnline(selected, now) : false;
   const rssi = selected && fresh ? selected.rssi ?? null : null;
+  // Only while the chair is actually reachable. A stale SSID from hours ago
+  // would read as "currently on this network", which is exactly the wrong
+  // conclusion when a chair has dropped off the air.
+  const ssid = selected && fresh ? selected.ssid?.trim() || null : null;
   const barColor = (n: number): string =>
     rssi != null && rssi > -95 + n * 14 ? 'var(--ink)' : 'color-mix(in srgb, var(--ink) 20%, transparent)';
 
@@ -2227,9 +2243,32 @@ export default function OpsPage() {
               justifyContent: 'flex-end',
             }}
           >
+            {/* Network name, to the LEFT of the signal bars. Strength alone
+                cannot answer "is it on the right WiFi?" — a strong bar on the
+                wrong SSID looks the same as a strong bar on the right one.
+                Rendered only when the chair actually reported one: firmware
+                older than 1.3.5 never sent it, and inventing a name would be
+                worse than showing nothing. */}
+            {ssid ? (
+              <span
+                className="deskonly"
+                title={`Joined to “${ssid}”`}
+                style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: 'var(--muted)',
+                  maxWidth: 120,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {ssid}
+              </span>
+            ) : null}
             <span
               style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 16 }}
-              title={rssi == null ? 'No uplink' : `${rssi} dBm`}
+              title={rssi == null ? 'No uplink' : `${rssi} dBm${ssid ? ` on “${ssid}”` : ''}`}
             >
               <span style={{ width: 3, height: 5, borderRadius: 2, background: barColor(1) }} />
               <span style={{ width: 3, height: 8, borderRadius: 2, background: barColor(2) }} />

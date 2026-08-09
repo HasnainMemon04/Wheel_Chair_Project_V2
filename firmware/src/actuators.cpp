@@ -108,6 +108,9 @@ static bool tamperAlarmLatched = false;
 static bool tamperReported = false;
 static bool tamperArmed = false;
 static unsigned long lastTamperEventMs = 0;
+// When the continuous tamper siren started, for the auto-mute below. 0 = not
+// sounding. Never persisted: a reboot re-arms the siren from scratch.
+static uint32_t tamperAlarmSinceMs = 0;
 
 // ---- Alarm silencing -------------------------------------------------------
 // Silencing is NOT the same as clearing. CLEAR_SOS releases every latch — the
@@ -447,6 +450,7 @@ void clearManualSOS() {
     tamperAlarmLatched = false;
     tamperWarnCount = 0;
     tamperReported = false;
+    tamperAlarmSinceMs = 0;
     alarmSilenced = false;
     silencedCauses = 0;
     buzzerWrite(false);
@@ -484,12 +488,54 @@ bool isAlarmSilenced() {
     return alarmSilenced;
 }
 
+#if TAMPER_BUZZER_TIMEOUT_MS > 0
+/**
+ * Mute the tamper siren once it has sounded for TAMPER_BUZZER_TIMEOUT_MS.
+ *
+ * The siren otherwise runs until CLEAR_TAMPER arrives, which assumes an operator
+ * can reach the chair. With the uplink down there is no way to stop it, and an
+ * alarm that cannot be silenced becomes the problem rather than the warning.
+ *
+ * Sound only. tamperAlarmLatched, tamper_warn_count and the telemetry are all
+ * left exactly as they are, so the console keeps reporting the tamper and still
+ * needs an explicit acknowledgement — a quiet chair must never read as a
+ * resolved one.
+ *
+ * Restricted to a TAMPER-ONLY alarm on purpose. If a fall, a manual SOS or a
+ * measured over-temperature is also sounding, the siren keeps going: those are
+ * hazards to a person, not a security nuisance, and no timer may quieten them.
+ * Reuses the existing mute flag, so a NEW hazard appearing later still re-arms
+ * the siren through the same path an operator mute uses.
+ */
+static void serviceTamperSirenTimeout() {
+    if (!tamperAlarmLatched || tamperAlarmSinceMs == 0) return;
+    if (alarmSilenced) return;                  // already quiet
+    if (activeAlarmCauses() != 0x8) return;     // something worse is also sounding
+    if (millis() - tamperAlarmSinceMs < TAMPER_BUZZER_TIMEOUT_MS) return;
+
+    alarmSilenced = true;
+    silencedCauses = activeAlarmCauses();
+    buzzerWrite(false);
+    Serial.printf(
+        "[Tamper] Siren auto-muted after %us. Tamper is STILL latched — "
+        "CLEAR_TAMPER is still required.\n",
+        (unsigned)(TAMPER_BUZZER_TIMEOUT_MS / 1000UL)
+    );
+    reportSafetyEvent(
+        "TAMPER_SIREN_TIMEOUT",
+        "{\"seconds\":" + String(TAMPER_BUZZER_TIMEOUT_MS / 1000UL)
+            + ",\"still_latched\":1}"
+    );
+}
+#endif
+
 // Anti-tamper acknowledgement (CLEAR_TAMPER command from operator/rider).
 // Silences the siren, resets the warning count, and re-arms cleanly.
 void clearTamper() {
     tamperAlarmLatched = false;
     tamperWarnCount = 0;
     tamperReported = false;
+    tamperAlarmSinceMs = 0;
     buzzerWrite(false);
     Serial.println("[Tamper] Cleared by operator/rider acknowledgment. Re-armed.");
 }
@@ -508,6 +554,13 @@ void safetySupervisorTask(void *pvParameters) {
     while (true) {
         esp_task_wdt_reset();
         loopTicks++;
+
+#if TAMPER_BUZZER_TIMEOUT_MS > 0
+        // Runs before the buzzer is driven below, and here rather than in the
+        // network task on purpose: the whole point is that it still fires when
+        // the uplink is dead.
+        serviceTamperSirenTimeout();
+#endif
 
         // Handle non-blocking buzzer warning beeps decrement
         if (buzzerBeepTicks > 0) {
@@ -690,6 +743,7 @@ void safetySupervisorTask(void *pvParameters) {
                     tamperWarnCount++;
                     if (tamperWarnCount >= TAMPER_ALARM_AT) {
                         tamperAlarmLatched = true;
+                        tamperAlarmSinceMs = millis();
                         if (!tamperReported) {
                             tamperReported = true;
                             reportSafetyEvent("TAMPER", "{\"count\":" + String(tamperWarnCount) + "}");
@@ -706,6 +760,7 @@ void safetySupervisorTask(void *pvParameters) {
                 tamperWarnCount = 0;
                 tamperAlarmLatched = false;
                 tamperReported = false;
+                tamperAlarmSinceMs = 0;
             }
 
             // Tilt Warning checks (MPU6050 tilt > 30 deg but <= 50 deg)

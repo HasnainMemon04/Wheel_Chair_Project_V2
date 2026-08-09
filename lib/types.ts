@@ -86,6 +86,13 @@ export interface DeviceState {
   pwr_cut: boolean | null;
   uptime: number | null;
   rssi: number | null;
+  /**
+   * The WiFi network the chair is joined to. Signal strength alone cannot tell
+   * an operator whether it is on the RIGHT network — a strong bar on the wrong
+   * SSID looks identical to a strong bar on the right one. Null on firmware
+   * older than 1.3.5, which never reported it.
+   */
+  ssid: string | null;
   power: boolean;
   locked: boolean;
   session_state: string;

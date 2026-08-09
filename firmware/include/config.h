@@ -13,7 +13,7 @@
 // running older firmware parse the target version with a strict %d.%d.%d
 // reader, and a two-part string there is unparseable — which reads as
 // "not newer" and silently refuses the OTA.
-#define FW_VERSION         "1.3.4"
+#define FW_VERSION         "1.3.5"
 
 // ------------------------- WiFi & Supabase Credentials -------
 #if __has_include("private_config.h")
@@ -89,6 +89,29 @@
 #define TAMPER_ALARM_AT          4     // 3 warning chirps, 4th => continuous siren
 #define TAMPER_MPU_ACCEL_THRESH  4.5f  // m/s^2 deviation from 1g (~0.46g) = heavy shove/lift/shake (increased from 2.5)
 #define TAMPER_MPU_GYRO_THRESH   45.0f // deg/s rotation rate = rapid tilting/turning the chair (increased from 30.0)
+
+// How long the tamper siren may sound before it mutes itself.
+//
+// Without this the siren runs until an operator sends CLEAR_TAMPER, which
+// assumes the operator can reach the chair. If the uplink is down there is no
+// way to stop it at all — and an alarm nobody can silence is its own fault.
+//
+// Mutes the SOUND only. The tamper latch, the disturbance count and the
+// telemetry are untouched, so the console still reports the tamper and still
+// requires an explicit acknowledgement. Quiet must never read as resolved.
+//
+// Set per-build (see platformio.ini) so it applies only to the chair asked for.
+// 0 keeps the original behaviour: sound until acknowledged.
+//
+// No cast in here: this macro is tested with #if, and the preprocessor cannot
+// evaluate `(uint32_t)` — it reduces the unknown identifier to 0 and then chokes
+// on the number that follows. 1000UL keeps the arithmetic unsigned at the use
+// site, which is what makes the millis() rollover comparison correct.
+#ifdef TAMPER_BUZZER_TIMEOUT_S
+#define TAMPER_BUZZER_TIMEOUT_MS  (TAMPER_BUZZER_TIMEOUT_S * 1000UL)
+#else
+#define TAMPER_BUZZER_TIMEOUT_MS  0
+#endif
 
 // ------------------------- Power sense ----------------------
 #define BATT_ADC_PIN       2    // ADC1_CH1 (GPIO 2) — via divider
