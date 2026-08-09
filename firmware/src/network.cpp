@@ -799,12 +799,24 @@ void uploadTelemetryTask(void *pvParameters) {
                     ? static_cast<int32_t>(millis() - localData.temp_last_sample_ms)
                     : -1;
                 doc["rssi"] = localData.wifi_rssi;
-                // NOTE: SSID reporting was attempted in 1.3.5/1.3.6 and pulled
-                // back out. Both of those images failed to boot, and reporting
-                // the network name was the only other change in them, so it is
-                // deliberately absent here to isolate the tamper-siren timeout.
-                // The device_state.ssid column and the console label are already
-                // in place and will populate whenever it is reintroduced.
+                // NO WiFi.SSID() HERE. Two images died proving this:
+                //
+                //   1.3.5 called WiFi.SSID() while building this packet.
+                //   1.3.6 called it once at connect time, storing the result in a
+                //         static buffer instead.
+                //
+                // Different call sites, different tasks, and NEITHER image ever
+                // sent a single telemetry packet — both died before the network
+                // came up, with no rollback event and no panic reaching the cloud.
+                // 1.3.7 removed the call and booted first time, which isolates it
+                // to the WiFi.SSID() call itself rather than how its result was
+                // stored. Size was ruled out too: 1.3.6 is smaller than 1.3.3,
+                // which boots fine.
+                //
+                // To report the network name, use the activeSSID String this file
+                // already holds and passes to WiFi.begin() — no driver query, so
+                // nothing to crash. device_state.ssid and the console label are
+                // already in place and will populate as soon as it is sent.
                 doc["ota_status"] = localData.ota_status;
                 doc["ota_progress"] = localData.ota_progress;
                 doc["ota_last_error"] = localData.ota_last_error;
