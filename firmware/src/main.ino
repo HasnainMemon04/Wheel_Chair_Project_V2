@@ -38,15 +38,40 @@ static void fatalTaskCreation(const char *taskName) {
     ESP.restart();
 }
 
+static const char *resetReasonName(esp_reset_reason_t reason) {
+    switch (reason) {
+        case ESP_RST_POWERON: return "power_on";
+        case ESP_RST_EXT: return "external";
+        case ESP_RST_SW: return "software";
+        case ESP_RST_PANIC: return "panic";
+        case ESP_RST_INT_WDT: return "interrupt_watchdog";
+        case ESP_RST_TASK_WDT: return "task_watchdog";
+        case ESP_RST_WDT: return "watchdog";
+        case ESP_RST_DEEPSLEEP: return "deep_sleep";
+        case ESP_RST_BROWNOUT: return "brownout";
+        case ESP_RST_SDIO: return "sdio";
+        default: return "unknown";
+    }
+}
+
+static bool isAbnormalReset(esp_reset_reason_t reason) {
+    return reason == ESP_RST_PANIC
+        || reason == ESP_RST_INT_WDT
+        || reason == ESP_RST_TASK_WDT
+        || reason == ESP_RST_WDT
+        || reason == ESP_RST_BROWNOUT;
+}
+
 void setup() {
     // Initialize Serial Debug Monitor
     Serial.begin(115200);
     delay(1000);
+    const esp_reset_reason_t resetReason = esp_reset_reason();
     Serial.println("=================================================");
     Serial.printf(
         "[System] Firmware %s | reset_reason=%d | free_heap=%u\n",
         FW_VERSION,
-        static_cast<int>(esp_reset_reason()),
+        static_cast<int>(resetReason),
         static_cast<unsigned int>(ESP.getFreeHeap())
     );
     Serial.println("   Smart Rental Wheelchair IoT System (M1)      ");
@@ -66,7 +91,57 @@ void setup() {
     restorePersistedPowerCut();
     initOTA();
     initNetwork();
+
+    // Queue abnormal reset evidence immediately. If the network is still down,
+    // the durable event outbox stores it and uploads it after recovery.
+    if (isAbnormalReset(resetReason)) {
+        reportSafetyEvent(
+            "DEVICE_RESET",
+            "{\"reason\":\"" + String(resetReasonName(resetReason))
+                + "\",\"reason_code\":" + String(static_cast<int>(resetReason))
+                + ",\"fw\":\"" + String(FW_VERSION)
+                + "\",\"free_heap\":" + String(ESP.getFreeHeap()) + "}"
+        );
+    }
     esp_task_wdt_init(TASK_WATCHDOG_TIMEOUT_S, true);
+
+    // ---------------------------------------------------------------------
+    // A STALLED UPLINK MUST NEVER REBOOT THE CHAIR.
+    //
+    // This is the fix for chairs restarting whenever the network dropped, and
+    // it is a one-line consequence of two sdkconfig defaults:
+    //
+    //     CONFIG_ESP_TASK_WDT_PANIC             1   -> the WDT reboots the chip
+    //     CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0  1   -> it watches core 0 idle
+    //
+    // networkTask and uploadTelemetryTask are both pinned to core 0. Whenever
+    // they ran long without core 0 reaching idle — a stalled TLS handshake, DNS
+    // going nowhere, a large event outbox draining to SPIFFS after an outage —
+    // the watchdog fired and panicked the WHOLE chip. Sensors, battery reading,
+    // uptime, tamper counters and the ride all died with it, which is exactly
+    // what "it resets when the internet disconnects" looks like from outside.
+    // Note CPU1's idle task is NOT watched, so only the network core could ever
+    // do this. That asymmetry is why the symptom tracked the network so closely.
+    //
+    // Un-watching core 0's idle task removes the mechanism entirely. It does NOT
+    // weaken the safety watchdog: safetySupervisorTask and the three sensor
+    // tasks each call esp_task_wdt_add(NULL) and feed it explicitly, so a task
+    // that genuinely hangs still resets the chair — which is what should happen
+    // on a mobility device. What can no longer happen is the network stack
+    // taking the chair down with it.
+    // ---------------------------------------------------------------------
+    TaskHandle_t networkCoreIdle = xTaskGetIdleTaskHandleForCPU(0);
+    if (networkCoreIdle != NULL && esp_task_wdt_delete(networkCoreIdle) == ESP_OK) {
+        Serial.println(
+            "[System] Core-0 idle task un-watched: a stalled uplink can no "
+            "longer panic-reboot the chair."
+        );
+    } else {
+        Serial.println(
+            "[System] WARNING: could not un-watch core-0 idle. A stalled uplink "
+            "may still reset the chair."
+        );
+    }
 
     // Register FreeRTOS idle task hooks to monitor core usage
     esp_register_freertos_idle_hook_for_cpu(idleHookCore0, 0);

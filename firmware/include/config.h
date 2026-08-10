@@ -13,7 +13,7 @@
 // running older firmware parse the target version with a strict %d.%d.%d
 // reader, and a two-part string there is unparseable — which reads as
 // "not newer" and silently refuses the OTA.
-#define FW_VERSION         "1.3.7"
+#define FW_VERSION         "1.4.0"
 
 // ------------------------- WiFi & Supabase Credentials -------
 #if __has_include("private_config.h")
@@ -34,7 +34,28 @@
 #define TELEMETRY_OTA_MS    2000
 #define TELEMETRY_LOOP_MS   25
 
+// Slow-link pacing ceiling.
+//
+// On a high-latency link a POST can take longer than the send interval, so a
+// fixed 1 Hz cadence means back-to-back requests with no gap: the radio stays
+// saturated, every request gets slower, and the queue never drains. The upload
+// task therefore never schedules sooner than the LAST request actually took —
+// self-pacing, with no measurement of the link needed.
+//
+// Capped here rather than left unbounded because the console calls a chair
+// offline after 10s of silence (OFFLINE_AFTER_MS in lib/mapping.ts). Pacing must
+// stay comfortably inside that, or a slow chair would be reported as a dead one.
+#define TELEMETRY_SLOW_LINK_MAX_MS 5000UL
+
 // ------------------------- Reliability ----------------------
+#define WIFI_CONNECT_ATTEMPT_MS       10000UL
+#define WIFI_RECONNECT_INITIAL_MS      2000UL
+#define WIFI_RECONNECT_MAX_MS         60000UL
+#define WIFI_PROVISION_AFTER_FAILURES       3
+// A provisioning portal must never strand an unattended chair in AP mode.
+// It is offered only when this boot has never reached the configured network,
+// and closes automatically so normal station reconnect attempts can resume.
+#define WIFI_PORTAL_TIMEOUT_MS       120000UL
 #define TASK_WATCHDOG_TIMEOUT_S       12
 #define IMU_STALE_TIMEOUT_MS          500
 #define TEMP_STALE_TIMEOUT_MS         5000

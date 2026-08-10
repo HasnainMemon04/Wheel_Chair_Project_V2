@@ -254,6 +254,11 @@ String calculateHMAC(const String &payload, const String &key) {
 
 void initNetwork() {
     Serial.println("[Network] Initializing WiFi...");
+    // Reconnection is controlled by networkTask. Avoid persisting transient
+    // radio state to flash while allowing the station driver to recover
+    // association between explicit checks.
+    WiFi.persistent(false);
+    WiFi.setAutoReconnect(true);
     WiFi.mode(WIFI_MODE_STA);
     WiFi.disconnect();
 
@@ -323,37 +328,44 @@ void initNetwork() {
     );
 }
 
-// WiFi Monitor Task: connect with saved creds; after repeated failures open the
-// AP config portal ("WheelchairSetup") to capture new creds, then retry forever.
+// WiFi monitor: reconnect forever with known credentials. The setup portal is
+// offered only when this boot has never connected, and it is time-bounded so
+// an unattended chair always returns to station reconnect attempts.
 void networkTask(void *pvParameters) {
-    uint32_t backoffMs = 2000;
-    const uint32_t maxBackoffMs = 60000;
+    uint32_t backoffMs = WIFI_RECONNECT_INITIAL_MS;
 
     // How long to keep failing before we open the AP config portal.
     // Each connect attempt below waits up to 10s, so ~3 failed attempts ≈ 30s.
-    const int failuresBeforePortal = 3;
     int consecutiveFailures = 0;
+    bool connectedSinceBoot = false;
+    uint32_t outageStartedMs = millis();
 
     Serial.println("[Tasks] WiFi Task started.");
 
     while (true) {
         if (WiFi.status() != WL_CONNECTED) {
             wifiConnected = false;
+            if (outageStartedMs == 0) outageStartedMs = millis();
             Serial.printf("[Network] WiFi not connected. Connecting to SSID: %s...\n", activeSSID.c_str());
             WiFi.mode(WIFI_STA);
             WiFi.begin(activeSSID.c_str(), activePASS.c_str());
 
             // Wait up to 10s for connection
             int retries = 0;
-            while (WiFi.status() != WL_CONNECTED && retries < 20) {
+            const int maxRetries = WIFI_CONNECT_ATTEMPT_MS / 500UL;
+            while (WiFi.status() != WL_CONNECTED && retries < maxRetries) {
                 vTaskDelay(pdMS_TO_TICKS(500));
                 retries++;
             }
 
             if (WiFi.status() == WL_CONNECTED) {
                 wifiConnected = true;
-                backoffMs = 2000;            // Reset backoff
-                consecutiveFailures = 0;     // Reset failure counter
+                const uint32_t outageMs = outageStartedMs == 0
+                    ? 0
+                    : millis() - outageStartedMs;
+                const int failedAttempts = consecutiveFailures;
+                backoffMs = WIFI_RECONNECT_INITIAL_MS;
+                consecutiveFailures = 0;
 
                 Serial.printf(
                     "[Network] Connected. IP: %s | DNS: %s\n",
@@ -361,34 +373,55 @@ void networkTask(void *pvParameters) {
                     WiFi.dnsIP().toString().c_str()
                 );
                 configureSNTP();             // Start real wall-clock sync (idempotent)
+
+                if (connectedSinceBoot) {
+                    reportSafetyEvent(
+                        "NETWORK_RESTORED",
+                        "{\"outage_ms\":" + String(outageMs)
+                            + ",\"failed_attempts\":" + String(failedAttempts) + "}"
+                    );
+                }
+                connectedSinceBoot = true;
+                outageStartedMs = 0;
             } else {
                 consecutiveFailures++;
                 Serial.printf("[Network] Connection failed (%d/%d).\n",
-                              consecutiveFailures, failuresBeforePortal);
+                              consecutiveFailures, WIFI_PROVISION_AFTER_FAILURES);
 
-                // After ~30s of failure, open the AP portal to re-provision.
-                if (consecutiveFailures >= failuresBeforePortal) {
-                    Serial.println("[Network] Repeated failures. Opening WiFi setup portal...");
+                // A chair that was already online has valid credentials. Keep
+                // retrying through an outage instead of switching the radio
+                // into a setup portal and waiting there forever.
+                if (
+                    !connectedSinceBoot
+                    && consecutiveFailures >= WIFI_PROVISION_AFTER_FAILURES
+                ) {
+                    Serial.println("[Network] Initial connection failed. Opening bounded WiFi setup portal...");
                     Serial.println("[Network] Uploads paused; sensors & safety keep running.");
 
-                    // Blocking portal: runs until the user submits new credentials.
-                    // Sensors/safety tasks keep running on their own cores/tasks.
-                    bool got = startConfigPortal(0);   // 0 = wait indefinitely
+                    const bool got = startConfigPortal(WIFI_PORTAL_TIMEOUT_MS);
 
                     if (got) {
                         // Reload the freshly-saved credentials and try again immediately.
                         loadSavedWiFiCreds(activeSSID, activePASS);
                         Serial.printf("[Network] New creds loaded. Reconnecting to SSID: %s...\n",
                                       activeSSID.c_str());
+                    } else {
+                        Serial.println(
+                            "[Network] Setup portal timed out. Resuming automatic reconnect."
+                        );
                     }
 
                     consecutiveFailures = 0;
-                    backoffMs = 2000;
+                    backoffMs = WIFI_RECONNECT_INITIAL_MS;
                     // Loop straight back to a connect attempt with the new creds.
                 } else {
                     Serial.printf("[Network] Backing off for %d ms...\n", backoffMs);
                     vTaskDelay(pdMS_TO_TICKS(backoffMs));
-                    backoffMs = min(backoffMs * 2, maxBackoffMs);
+                    // Both operands cast explicitly: backoffMs is uint32_t and
+                    // WIFI_RECONNECT_MAX_MS is an unsigned long literal, which
+                    // are distinct types to min()'s template even where they are
+                    // the same width. The tree did not compile without this.
+                    backoffMs = min<uint32_t>(backoffMs * 2, (uint32_t)WIFI_RECONNECT_MAX_MS);
                 }
             }
         } else {
@@ -849,11 +882,26 @@ void uploadTelemetryTask(void *pvParameters) {
             const uint32_t httpStartedAt = millis();
             lastUploadCode = performHTTPSRequest(url, "POST", jsonPayload, signature, response);
             previousHttpMs = millis() - httpStartedAt;
-            nextTelemetryDueMs = millis() + desiredIntervalMs;
+
+            // Self-pacing for slow / high-latency links. If the last POST took
+            // longer than the send interval, wait at least that long again
+            // instead of firing straight into the next one. On a healthy link
+            // previousHttpMs is a few hundred ms and this changes nothing; on a
+            // bad link it stops the radio being saturated by requests that are
+            // each making the next one slower. Bounded so a paced chair still
+            // reports inside the console's offline window.
+            uint32_t pacedIntervalMs = desiredIntervalMs;
+            if (previousHttpMs > pacedIntervalMs) {
+                pacedIntervalMs = min<uint32_t>(previousHttpMs, (uint32_t)TELEMETRY_SLOW_LINK_MAX_MS);
+            }
+            nextTelemetryDueMs = millis() + pacedIntervalMs;
 
             // 5. Parse and execute piggybacked commands from the telemetry response (near-instant execution)
             if (lastUploadCode == 200) {
-                markFirmwareValid(); // Validate boot slot target on successful telemetry POST
+                // Prompt an extra local validation check. The OTA watchdog also
+                // performs this without internet, so cloud reachability is not
+                // part of firmware acceptance.
+                markFirmwareValid();
                 if (response.length() > 0) {
                     processCommands(response);
                 }
