@@ -7,6 +7,7 @@
 #include "config.h"
 #include <esp_system.h>
 #include <esp_task_wdt.h>
+#include <Preferences.h>
 
 // Global task handles for diagnostic stack tracking
 TaskHandle_t sensorPollTaskHandle = NULL;
@@ -92,13 +93,36 @@ void setup() {
     initOTA();
     initNetwork();
 
-    // Queue abnormal reset evidence immediately. If the network is still down,
-    // the durable event outbox stores it and uploads it after recovery.
-    if (isAbnormalReset(resetReason)) {
+    // Report EVERY reset, not just the ones classified abnormal.
+    //
+    // Filtering to isAbnormalReset() hid the single most important case. On
+    // WCHAIR-004 the chair rebooted four times in thirteen minutes with a
+    // longest run of 123s, and logged NOTHING — because panic, both watchdogs
+    // and brownout were all excluded by elimination, leaving POWERON: the board
+    // physically losing its supply and coming back. That is precisely the fault
+    // worth shouting about, and it was the one reason guaranteed to be silent.
+    //
+    // A power-on after someone switches the chair on is unremarkable on its own.
+    // What makes it evidence is the RATE, so the reason travels with a count of
+    // how many times this board has booted. One poweron is a person; one every
+    // ninety seconds is a wiring fault.
+    //
+    // isAbnormalReset() is kept and still marks the reason, so a panic or a
+    // brownout is still distinguishable at a glance from an ordinary start.
+    {
+        Preferences bootPrefs;
+        uint32_t bootCount = 0;
+        if (bootPrefs.begin("boot_stats", false)) {
+            bootCount = bootPrefs.getUInt("boots", 0) + 1;
+            bootPrefs.putUInt("boots", bootCount);
+            bootPrefs.end();
+        }
         reportSafetyEvent(
             "DEVICE_RESET",
             "{\"reason\":\"" + String(resetReasonName(resetReason))
                 + "\",\"reason_code\":" + String(static_cast<int>(resetReason))
+                + ",\"abnormal\":" + String(isAbnormalReset(resetReason) ? 1 : 0)
+                + ",\"boot_count\":" + String(bootCount)
                 + ",\"fw\":\"" + String(FW_VERSION)
                 + "\",\"free_heap\":" + String(ESP.getFreeHeap()) + "}"
         );
