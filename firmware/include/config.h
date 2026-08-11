@@ -13,7 +13,7 @@
 // running older firmware parse the target version with a strict %d.%d.%d
 // reader, and a two-part string there is unparseable — which reads as
 // "not newer" and silently refuses the OTA.
-#define FW_VERSION         "1.4.3"
+#define FW_VERSION         "1.4.4"
 
 // ------------------------- WiFi & Supabase Credentials -------
 #if __has_include("private_config.h")
@@ -56,7 +56,18 @@
 // It is offered only when this boot has never reached the configured network,
 // and closes automatically so normal station reconnect attempts can resume.
 #define WIFI_PORTAL_TIMEOUT_MS       120000UL
-#define TASK_WATCHDOG_TIMEOUT_S       12
+// Raised 12 -> 30. The watchdog must catch a genuinely wedged safety task, but
+// it must NOT fire because the flash bus was briefly busy. Flash writes disable
+// the instruction cache and stall both cores, so a burst of them can delay a
+// watched task by far more than a working system ever should — and killing a
+// mobility device over a transient stall is worse than the stall. 30s still
+// catches a real hang comfortably; nothing legitimate blocks a task that long.
+#define TASK_WATCHDOG_TIMEOUT_S       30
+
+// Minimum spacing between flash appends when spilling queued events offline.
+// See the rate-limit comment in uploadTelemetryTask: unthrottled, this path
+// issued ~80 SPIFFS writes a second and starved the watchdog-fed tasks.
+#define EVENT_PERSIST_MIN_INTERVAL_MS 250UL
 #define IMU_STALE_TIMEOUT_MS          500
 #define TEMP_STALE_TIMEOUT_MS         5000
 #define SENSOR_STARTUP_GRACE_MS       8000

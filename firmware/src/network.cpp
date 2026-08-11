@@ -347,6 +347,18 @@ void networkTask(void *pvParameters) {
             wifiConnected = false;
             if (outageStartedMs == 0) outageStartedMs = millis();
             Serial.printf("[Network] WiFi not connected. Connecting to SSID: %s...\n", activeSSID.c_str());
+            // Tear the old association down before starting a new one.
+            //
+            // This loop can call begin() many times during a long outage. Doing
+            // that on top of a half-open association leaves the esp_wifi driver
+            // accumulating state, and it eventually stops completing handshakes
+            // at all — the chair sits "connecting" forever with a healthy AP in
+            // range. disconnect() first makes every attempt start from the same
+            // clean state, so attempt fifty behaves exactly like attempt one.
+            //
+            // false = do not erase the stored config; we re-supply it right below.
+            WiFi.disconnect(false, false);
+            vTaskDelay(pdMS_TO_TICKS(100));
             WiFi.mode(WIFI_STA);
             WiFi.begin(activeSSID.c_str(), activePASS.c_str());
 
@@ -617,18 +629,38 @@ void uploadTelemetryTask(void *pvParameters) {
     double maxIdleRateCore1 = 1.0;
     uint32_t nextEventAttemptMs = 0;
     uint32_t eventRetryDelayMs = 2000;
+    uint32_t nextPersistAttemptMs = 0;
 
     while (true) {
-        if ((!wifiConnected || isPortalActive()) && eventFsReady) {
+        // Spill queued events to flash while offline — RATE LIMITED.
+        //
+        // This loop runs every TELEMETRY_LOOP_MS (25ms), and it used to append up
+        // to 2 events per pass: ~80 SPIFFS writes a second for as long as the
+        // outage lasted. On the ESP32 a flash write takes the flash lock AND
+        // disables the instruction cache, stalling BOTH cores — including the
+        // safety supervisor and sensor tasks, which are subscribed to the task
+        // watchdog and must feed it. Starve them long enough and the watchdog
+        // panics the whole chip.
+        //
+        // That is a reset caused BY the disconnection handling itself, which is
+        // exactly the reported symptom: the chair runs fine, then dies around the
+        // reconnect. It also explains why WCHAIR-002 never showed it — 80 events
+        // in 24h against WCHAIR-004's 544, so far less to spill.
+        //
+        // One event per EVENT_PERSIST_MIN_INTERVAL_MS still drains a full 40-slot
+        // queue in ten seconds, which is far faster than events are produced,
+        // while leaving the flash bus almost entirely free.
+        if (
+            (!wifiConnected || isPortalActive())
+            && eventFsReady
+            && static_cast<int32_t>(millis() - nextPersistAttemptMs) >= 0
+        ) {
             SafetyEvent eventToPersist;
-            uint8_t persistedThisLoop = 0;
-            while (
-                persistedThisLoop < 2
-                && xQueuePeek(safetyEventQueue, &eventToPersist, 0) == pdTRUE
-            ) {
-                if (!appendPersistedEvent(eventToPersist)) break;
-                xQueueReceive(safetyEventQueue, &eventToPersist, 0);
-                persistedThisLoop++;
+            if (xQueuePeek(safetyEventQueue, &eventToPersist, 0) == pdTRUE) {
+                if (appendPersistedEvent(eventToPersist)) {
+                    xQueueReceive(safetyEventQueue, &eventToPersist, 0);
+                }
+                nextPersistAttemptMs = millis() + EVENT_PERSIST_MIN_INTERVAL_MS;
             }
         }
 
